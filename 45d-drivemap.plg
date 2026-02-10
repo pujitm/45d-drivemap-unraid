@@ -3,7 +3,7 @@
   <!ENTITY name "45d-drivemap">
   <!ENTITY author "45Drives + Unraid">
   <!ENTITY version "0.1.1">
-  <!ENTITY plugin_url "https://raw.githubusercontent.com/pujitm/45d-drivemap-unraid/main/45d-drivemap.plg">
+  <!ENTITY plugin_url "https://github.com/pujitm/45d-drivemap-unraid/releases/latest/download/45d-drivemap.plg">
   <!ENTITY assets_txz_name "45d-drivemap-assets-0.1.1.txz">
   <!ENTITY assets_txz_url "https://github.com/pujitm/45d-drivemap-unraid/releases/download/v0.1.1/&assets_txz_name;">
   <!ENTITY assets_txz_sha256 "528d22ad8892563275d9a171d6429845f1c8763bfe47e5762424ca663bec8cb1">
