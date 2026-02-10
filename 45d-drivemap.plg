@@ -6,7 +6,7 @@
   <!ENTITY plugin_url "https://github.com/pujitm/45d-drivemap-unraid/releases/latest/download/45d-drivemap.plg">
   <!ENTITY package_txz_name "45d-drivemap-&version;.txz">
   <!ENTITY package_txz_url "https://github.com/pujitm/45d-drivemap-unraid/releases/download/v0.1.3/&package_txz_name;">
-  <!ENTITY package_txz_sha256 "7881802f752597794bb4e7efb5229a615357e8cecf064ffb27bfdb7af2925e5b">
+  <!ENTITY package_txz_sha256 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855">
   <!ENTITY package_source "/boot/config/plugins/&name;/&package_txz_name;">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin_url;"

@@ -9,8 +9,12 @@ PACKAGE_DIR="${ROOT_DIR}/packages"
 PACKAGE_PATH="${PACKAGE_DIR}/${PACKAGE_NAME}"
 
 STAGE_DIR=$(mktemp -d)
+FILE_LIST=""
 cleanup() {
   rm -rf "${STAGE_DIR}"
+  if [[ -n "${FILE_LIST}" ]]; then
+    rm -f "${FILE_LIST}"
+  fi
 }
 trap cleanup EXIT
 
@@ -37,14 +41,28 @@ rm -f "${PACKAGE_PATH}"
 # Keep package metadata Linux-friendly when building on macOS.
 export COPYFILE_DISABLE=1
 
-TAR_CREATE_ARGS=(-cJf "${PACKAGE_PATH}")
-if tar --version 2>/dev/null | head -n 1 | grep -qi "gnu tar"; then
-  TAR_CREATE_ARGS+=(--owner=0 --group=0 --numeric-owner --no-acls --no-xattrs)
-else
-  TAR_CREATE_ARGS+=(--uid 0 --gid 0 --uname root --gname root --no-acls --no-fflags --no-mac-metadata --no-xattrs)
+# Normalize mtimes so the same inputs yield the same package hash.
+find "${STAGE_DIR}/usr" -exec touch -t 200001010000 {} +
+
+if ! command -v xz >/dev/null 2>&1; then
+  echo "xz is required to build ${PACKAGE_NAME}" >&2
+  exit 1
 fi
 
-tar -C "${STAGE_DIR}" "${TAR_CREATE_ARGS[@]}" ./usr
+TAR_ARGS=()
+if tar --version 2>/dev/null | head -n 1 | grep -qi "gnu tar"; then
+  TAR_BIN="tar"
+  TAR_ARGS+=(--owner=0 --group=0 --numeric-owner --no-acls --no-xattrs --sort=name --mtime=@946684800)
+else
+  TAR_BIN="bsdtar"
+  TAR_ARGS+=(--uid 0 --gid 0 --uname root --gname root --no-acls --no-fflags --no-mac-metadata --no-xattrs)
+fi
+
+FILE_LIST=$(mktemp)
+(cd "${STAGE_DIR}" && find ./usr -print | LC_ALL=C sort > "${FILE_LIST}")
+
+"${TAR_BIN}" -C "${STAGE_DIR}" "${TAR_ARGS[@]}" -cf - -T "${FILE_LIST}" \
+  | xz --threads=0 -c > "${PACKAGE_PATH}"
 
 # Guard against archiving the staging root itself (./), which can clobber /
 # permissions when extracting with -C /.
