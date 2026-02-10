@@ -31,38 +31,34 @@ fi
 PLUGIN_URL="https://github.com/${REPO}/releases/latest/download/45d-drivemap.plg"
 PACKAGE_URL_BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
 CHANGES_BLOCK="$(
-  awk -v version="${VERSION}" '
-    BEGIN { in_section = 0 }
-    /^##[[:space:]]+/ {
-      if (in_section) exit
-      heading = $0
-      sub(/^##[[:space:]]+/, "", heading)
-      split(heading, parts, /[[:space:]]+/)
-      match_version = parts[1]
-      gsub(/^\[/, "", match_version)
-      gsub(/\]$/, "", match_version)
-      if (match_version == version) {
-        in_section = 1
-      }
-      next
-    }
-    in_section { print }
-  ' "${CHANGELOG}" \
-  | awk '
+  awk '
       {
         line = $0
         sub(/\r$/, "", line)
+        if (line ~ /^#[[:space:]]+Changelog/) next
         if (line ~ /^[[:space:]]*$/) next
-        if (line ~ /^###[[:space:]]+/) {
-          sub(/^###[[:space:]]+/, "", line)
+        if (line ~ /^##[[:space:]]+/) {
+          sub(/^##[[:space:]]+/, "", line)
           print "- " line ":"
           next
         }
-        if (line ~ /^- /) { print line; next }
-        if (line ~ /^\* /) { sub(/^\*/, "-", line); print line; next }
-        print "- " line
+        if (line ~ /^###[[:space:]]+/) {
+          sub(/^###[[:space:]]+/, "", line)
+          print "  - " line ":"
+          next
+        }
+        if (line ~ /^- /) {
+          print "  " line
+          next
+        }
+        if (line ~ /^\* /) {
+          sub(/^\*/, "-", line)
+          print "  " line
+          next
+        }
+        print "  - " line
       }
-    ' \
+    ' "${CHANGELOG}" \
   | sed \
       -e "s/&/\\&amp;/g" \
       -e "s/</\\&lt;/g" \
@@ -71,7 +67,7 @@ CHANGES_BLOCK="$(
 )"
 
 if [[ -z "${CHANGES_BLOCK}" ]]; then
-  echo "No changelog section found for version ${VERSION} in ${CHANGELOG}" >&2
+  echo "Changelog has no renderable entries: ${CHANGELOG}" >&2
   exit 1
 fi
 
