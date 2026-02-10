@@ -1,6 +1,8 @@
 packages/*.txz
 packages/*.tar
 packages/*.tar.xz
+/45d-drivemap.plg
+/45d-drivemap-*.txz
 
 # macOS
 .DS_Store
