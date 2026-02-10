@@ -1,0 +1,33 @@
+[package]
+changelog = "CHANGELOG.md"
+
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = 'git commit -m "chore: prepare release $version"'
+
+[[workflows.steps]]
+type = "Command"
+command = "git push"
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --tags"
+
+[[workflows.steps]]
+type = "Release"
+
+[[workflows]]
+name = "document-change"
+
+[[workflows.steps]]
+type = "CreateChangeFile"
+
+[github]
+owner = "pujitm"
+repo = "45d-drivemap-unraid"

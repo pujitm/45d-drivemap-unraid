@@ -2,18 +2,20 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name "45d-drivemap">
   <!ENTITY author "45Drives + Unraid">
-  <!ENTITY version "0.1.1">
+  <!ENTITY version "0.1.3">
   <!ENTITY plugin_url "https://github.com/pujitm/45d-drivemap-unraid/releases/latest/download/45d-drivemap.plg">
   <!ENTITY package_txz_name "45d-drivemap-&version;.txz">
-  <!ENTITY package_txz_url "https://github.com/pujitm/45d-drivemap-unraid/releases/download/v0.1.1/&package_txz_name;">
-  <!ENTITY package_txz_sha256 "a3527a152683aea54e49053753bebc45f2b2a0276b378becf89fe2e596250a16">
+  <!ENTITY package_txz_url "https://github.com/pujitm/45d-drivemap-unraid/releases/download/v0.1.3/&package_txz_name;">
+  <!ENTITY package_txz_sha256 "7881802f752597794bb4e7efb5229a615357e8cecf064ffb27bfdb7af2925e5b">
   <!ENTITY package_source "/boot/config/plugins/&name;/&package_txz_name;">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin_url;"
   launch="Drive Map" min="6.12.0" icon="th">
 
   <CHANGES>
-    - packaged release flow using GitHub release assets
+    - Fixed:
+    - Updated PLG install scripts to use concrete runtime paths in CDATA.
+    - Preserved stable GitHub-hosted update/install URLs for plugin distribution.
   </CHANGES>
 
   <FILE Name="&package_source;">
@@ -28,18 +30,39 @@ set -e
 
 MAINNAME="45d-drivemap"
 PLUGIN_DIR="/usr/local/emhttp/plugins/${MAINNAME}"
-PACKAGE_FILE="/boot/config/plugins/${MAINNAME}/45d-drivemap-0.1.1.txz"
+PACKAGE_FILE="/boot/config/plugins/${MAINNAME}/45d-drivemap-0.1.3.txz"
 
 mkdir -p "/boot/config/plugins/${MAINNAME}"
 mkdir -p /var/local/45d
 
 if [ -f "${PACKAGE_FILE}" ]; then
   rm -rf "${PLUGIN_DIR}"
-  tar -xf "${PACKAGE_FILE}" -C /
+  tar --no-overwrite-dir -xf "${PACKAGE_FILE}" -C /
 fi
 
 chmod +x "${PLUGIN_DIR}/scripts/45d-generate-map" || true
 chmod +x "${PLUGIN_DIR}/scripts/45d-generate-server-info" || true
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Run="/bin/bash" Method="remove">
+    <INLINE>
+<![CDATA[
+set -e
+
+MAINNAME="45d-drivemap"
+PLUGIN_DIR="/usr/local/emhttp/plugins/${MAINNAME}"
+STATE_DIR="/var/local/45d"
+BOOT_DIR="/boot/config/plugins/${MAINNAME}"
+
+rm -rf "${PLUGIN_DIR}"
+rm -rf "${STATE_DIR}"
+
+if [ -d "${BOOT_DIR}" ]; then
+  rm -f "${BOOT_DIR}"/45d-drivemap-*.txz
+  rmdir "${BOOT_DIR}" 2>/dev/null || true
+fi
 ]]>
     </INLINE>
   </FILE>
