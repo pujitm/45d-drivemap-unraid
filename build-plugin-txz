@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+VERSION="${1:-$(awk -F= '/^version=/{print $2}' "${ROOT_DIR}/plugin.cfg")}"
+PLUGIN_NAME="45d-drivemap"
+PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.txz"
+PACKAGE_DIR="${ROOT_DIR}/packages"
+PACKAGE_PATH="${PACKAGE_DIR}/${PACKAGE_NAME}"
+
+STAGE_DIR=$(mktemp -d)
+cleanup() {
+  rm -rf "${STAGE_DIR}"
+}
+trap cleanup EXIT
+
+TARGET_DIR="${STAGE_DIR}/usr/local/emhttp/plugins/${PLUGIN_NAME}"
+mkdir -p "${TARGET_DIR}"
+
+cp -a \
+  "${ROOT_DIR}/DriveMap.page" \
+  "${ROOT_DIR}/plugin.cfg" \
+  "${ROOT_DIR}/assets" \
+  "${ROOT_DIR}/php" \
+  "${ROOT_DIR}/scripts" \
+  "${TARGET_DIR}/"
+
+# Build and release helpers are not needed on the Unraid runtime.
+rm -f \
+  "${TARGET_DIR}/scripts/build-assets-txz" \
+  "${TARGET_DIR}/scripts/build-plugin-txz" \
+  "${TARGET_DIR}/scripts/render-plg"
+
+mkdir -p "${PACKAGE_DIR}"
+rm -f "${PACKAGE_PATH}"
+tar -C "${STAGE_DIR}" -cJf "${PACKAGE_PATH}" .
+
+SHA256=$(shasum -a 256 "${PACKAGE_PATH}" | awk '{print $1}')
+printf '%s\n' "${PACKAGE_PATH}"
+printf '%s\n' "${SHA256}"

@@ -1,0 +1,6 @@
+packages/*.txz
+packages/*.tar
+packages/*.tar.xz
+
+# macOS
+.DS_Store
