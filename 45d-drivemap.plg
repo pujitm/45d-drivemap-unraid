@@ -1,0 +1,2135 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name "45d-drivemap">
+  <!ENTITY author "45Drives + Unraid">
+  <!ENTITY version "0.1.1">
+  <!ENTITY plugin_url "https://downloads.45drives.com/unraid/plugins/stable/45d-drivemap/45d-drivemap.plg">
+  <!ENTITY assets_txz_name "45d-drivemap-assets-0.1.1.txz">
+  <!ENTITY assets_txz_url "https://downloads.45drives.com/unraid/plugins/stable/45d-drivemap/&assets_txz_name;">
+  <!ENTITY assets_txz_sha256 "528d22ad8892563275d9a171d6429845f1c8763bfe47e5762424ca663bec8cb1">
+  <!ENTITY assets_source "/boot/config/plugins/&name;/&assets_txz_name;">
+]>
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin_url;"
+  launch="Drive Map" min="6.12.0" icon="th">
+
+  <CHANGES>
+    - initial scaffold
+  </CHANGES>
+
+  <FILE Name="&assets_source;">
+    <URL>&assets_txz_url;</URL>
+    <SHA256>&assets_txz_sha256;</SHA256>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/plugin.cfg">
+    <INLINE>
+<![CDATA[
+name=45d-drivemap
+version=0.1.1
+author=45Drives + Unraid
+displayName=45D Drive Map
+description=Embedded 45Drives drive map in Main tab
+support=https://45drives.com
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/DriveMap.page">
+    <INLINE>
+<![CDATA[
+Menu="Main:6"
+Title="Drive Map"
+Tag="th"
+---
+<?PHP
+$plugin = '45d-drivemap';
+$asset_root = "/plugins/$plugin/assets/45d";
+$asset_base = "$asset_root/45drives-disks";
+$api_base = "/plugins/$plugin/php/api.php";
+$embedded_fs = "/usr/local/emhttp/plugins/$plugin/assets/45d/45drives-disks/index.html";
+$use_embedded = is_file($embedded_fs);
+?>
+<?if ($use_embedded):?>
+  <style>
+  #drivemap-frame {
+    width: 100%;
+    height: 80vh;
+    min-height: 720px;
+    border: 0;
+  }
+  </style>
+  <iframe id="drivemap-frame" title="45D Drive Map" src="<?=$asset_base?>/index.html"></iframe>
+<?else:?>
+  <link rel="stylesheet" href="<?=$asset_root?>/drivemap.css">
+  <div id="drive-map-app" class="drivemap" data-api="<?=$api_base?>" data-asset-base="<?=$asset_root?>">
+    <div class="drivemap-toolbar">
+      <div class="drivemap-title">45D Drive Map</div>
+      <div class="drivemap-meta">
+        <span id="drivemap-status">Loading map...</span>
+        <input id="drivemap-refresh" type="button" value="Refresh">
+      </div>
+    </div>
+    <div id="drivemap-error" class="drivemap-error" style="display:none;"></div>
+    <div id="drivemap-canvas" class="drivemap-canvas"></div>
+    <div id="drivemap-details" class="drivemap-details">Select a bay to see drive details.</div>
+  </div>
+  <script src="<?=$asset_root?>/drivemap.js"></script>
+<?endif;?>
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/php/api.php">
+    <INLINE>
+<![CDATA[
+<?php
+$plugin = '45d-drivemap';
+$base_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
+$map_file = getenv('DRIVEMAP_OUTPUT_FILE') ?: ($base_dir . '/drivemap.json');
+$log_file = getenv('DRIVEMAP_LOG_FILE') ?: ($base_dir . '/drivemap.log');
+$default_generator = "/usr/local/emhttp/plugins/$plugin/scripts/45d-generate-map";
+if (!is_file($default_generator)) {
+  $default_generator = dirname(__DIR__) . '/scripts/45d-generate-map';
+}
+$generator = getenv('DRIVEMAP_GENERATOR') ?: $default_generator;
+$default_server_info_generator = "/usr/local/emhttp/plugins/$plugin/scripts/45d-generate-server-info";
+if (!is_file($default_server_info_generator)) {
+  $default_server_info_generator = dirname(__DIR__) . '/scripts/45d-generate-server-info';
+}
+$server_info_generator = getenv('DRIVEMAP_SERVER_INFO_GENERATOR') ?: $default_server_info_generator;
+$server_info_paths = [];
+$server_info_override = getenv('DRIVEMAP_SERVER_INFO');
+if ($server_info_override) {
+  $server_info_paths[] = $server_info_override;
+}
+$server_info_paths[] = '/etc/45drives/server_info/server_info.json';
+$server_info_paths[] = $base_dir . '/server_info.json';
+
+require_once __DIR__ . '/zfs_info.php';
+
+function respond_json($data, $status = 200)
+{
+  http_response_code($status);
+  header('Content-Type: application/json');
+  echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+  exit;
+}
+
+function load_json($path)
+{
+  if (!is_file($path)) {
+    return null;
+  }
+
+  $contents = @file_get_contents($path);
+  if ($contents === false) {
+    return null;
+  }
+
+  $data = json_decode($contents, true);
+  if (!is_array($data)) {
+    return null;
+  }
+
+  return $data;
+}
+
+function ensure_last_updated($data, $path)
+{
+  if (!is_array($data)) {
+    return $data;
+  }
+
+  if (!isset($data['lastUpdated']) && is_file($path)) {
+    $data['lastUpdated'] = gmdate('c', filemtime($path));
+  }
+
+  return $data;
+}
+
+function normalize_disk_info_rows($rows)
+{
+  if (!is_array($rows)) {
+    return [];
+  }
+
+  if (isset($rows[0]) && is_array($rows[0]) && array_key_exists('bay-id', $rows[0])) {
+    return $rows;
+  }
+
+  $flat = [];
+  foreach ($rows as $row) {
+    if (!is_array($row)) {
+      continue;
+    }
+    foreach ($row as $slot) {
+      if (is_array($slot)) {
+        $flat[] = $slot;
+      }
+    }
+  }
+
+  return $flat;
+}
+
+function load_server_info($paths)
+{
+  foreach ($paths as $path) {
+    $data = load_json($path);
+    if (is_array($data)) {
+      return $data;
+    }
+  }
+
+  return null;
+}
+
+function script_command($script)
+{
+  if (!is_file($script)) {
+    return null;
+  }
+  $first_line = '';
+  $fh = @fopen($script, 'r');
+  if ($fh) {
+    $first_line = (string)fgets($fh);
+    fclose($fh);
+  }
+  $is_php = (bool)preg_match('/php/i', $first_line);
+  if ($is_php) {
+    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    return escapeshellarg($php) . ' ' . escapeshellarg($script);
+  }
+  if (is_executable($script)) {
+    return escapeshellarg($script);
+  }
+  return null;
+}
+
+function run_script($script, $log_file, $not_found_error)
+{
+  $command = script_command($script);
+  if ($command === null) {
+    return [
+      'ok' => false,
+      'error' => $not_found_error,
+    ];
+  }
+
+  $output = [];
+  $code = 0;
+  exec($command . ' 2>&1', $output, $code);
+
+  if ($log_file) {
+    @file_put_contents($log_file, implode("\n", $output) . "\n", FILE_APPEND);
+  }
+
+  return [
+    'ok' => $code === 0,
+    'exitCode' => $code,
+    'output' => $output,
+  ];
+}
+
+function run_generator($generator, $log_file)
+{
+  return run_script($generator, $log_file, 'Generator script not found');
+}
+
+function run_server_info_generator($generator, $log_file)
+{
+  return run_script($generator, $log_file, 'Server info generator not found');
+}
+
+$action = $_REQUEST['action'] ?? 'drivemap';
+
+if ($action === 'drivemap' || $action === 'lsdev') {
+  $data = load_json($map_file);
+  if ($data === null) {
+    $result = run_generator($generator, $log_file);
+    if (!$result['ok']) {
+      respond_json($result, 500);
+    }
+    $data = load_json($map_file);
+  }
+  if ($data === null) {
+    respond_json(['error' => 'Drive map data unavailable'], 500);
+  }
+  respond_json(ensure_last_updated($data, $map_file));
+}
+
+if ($action === 'disk_info') {
+  $data = load_json($map_file);
+  if ($data === null) {
+    $result = run_generator($generator, $log_file);
+    if (!$result['ok']) {
+      respond_json($result, 500);
+    }
+    $data = load_json($map_file);
+  }
+  if (!$data || !isset($data['rows'])) {
+    respond_json(['error' => 'Drive map data unavailable'], 500);
+  }
+  respond_json([
+    'rows' => normalize_disk_info_rows($data['rows']),
+  ]);
+}
+
+if ($action === 'zfs_info') {
+  respond_json(generate_zfs_info());
+}
+
+if ($action === 'server_info') {
+  $data = load_server_info($server_info_paths);
+  if ($data === null) {
+    $result = run_server_info_generator($server_info_generator, $log_file);
+    if (!$result['ok']) {
+      respond_json($result, 500);
+    }
+    $data = load_server_info($server_info_paths);
+  }
+  if ($data === null) {
+    respond_json(['error' => 'server_info not available'], 500);
+  }
+  respond_json($data);
+}
+
+if ($action === 'status') {
+  $data = load_json($map_file);
+  $last_updated = null;
+
+  if ($data && isset($data['lastUpdated'])) {
+    $last_updated = $data['lastUpdated'];
+  } elseif (is_file($map_file)) {
+    $last_updated = gmdate('c', filemtime($map_file));
+  }
+
+  respond_json([
+    'exists' => is_file($map_file),
+    'lastUpdated' => $last_updated,
+  ]);
+}
+
+if ($action === 'refresh') {
+  $result = run_generator($generator, $log_file);
+  respond_json($result, $result['ok'] ? 200 : 500);
+}
+
+respond_json([
+  'error' => 'Unknown action',
+  'action' => $action,
+], 400);
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/php/zfs_info.php">
+    <INLINE>
+<![CDATA[
+<?php
+function zfs_fixture_dir()
+{
+  $dir = getenv('DRIVEMAP_ZFS_FIXTURE_DIR');
+  return $dir ? rtrim($dir, '/') : '';
+}
+
+function zfs_force_enabled()
+{
+  return getenv('DRIVEMAP_ZFS_FORCE') === '1';
+}
+
+function read_fixture($name)
+{
+  $dir = zfs_fixture_dir();
+  if ($dir === '') {
+    return null;
+  }
+  $path = $dir . '/' . $name;
+  if (is_file($path)) {
+    return (string)@file_get_contents($path);
+  }
+  return null;
+}
+
+function command_output($command, $fixture_name = '')
+{
+  if ($fixture_name !== '') {
+    $fixture = read_fixture($fixture_name);
+    if ($fixture !== null) {
+      return $fixture;
+    }
+  }
+  $output = shell_exec($command);
+  return $output === null ? '' : $output;
+}
+
+function zfs_installed()
+{
+  if (zfs_force_enabled()) {
+    return true;
+  }
+  $path = trim((string)command_output('command -v zfs 2>/dev/null'));
+  return $path !== '';
+}
+
+function get_zfs_list()
+{
+  $output = command_output('zfs list -H', 'zfs_list.txt');
+  if ($output === '') {
+    return [];
+  }
+  $zpools = [];
+  $lines = preg_split('/\r?\n/', trim($output));
+  foreach ($lines as $line) {
+    if ($line === '') {
+      continue;
+    }
+    $parts = explode("\t", $line);
+    if (!isset($parts[0])) {
+      continue;
+    }
+    $name = $parts[0];
+    if ($name === '' || strpos($name, '/') !== false || strpos($name, '@') !== false) {
+      continue;
+    }
+    $zpools[] = [
+      'name' => $name,
+      'used' => $parts[1] ?? '-',
+      'avail' => $parts[2] ?? '-',
+      'refer' => $parts[3] ?? '-',
+      'mountpoint' => $parts[4] ?? '-',
+    ];
+  }
+  return $zpools;
+}
+
+function get_zpool_list()
+{
+  $output = command_output('zpool list -H', 'zpool_list.txt');
+  if ($output === '') {
+    return [];
+  }
+  $zpools = [];
+  $lines = preg_split('/\r?\n/', trim($output));
+  foreach ($lines as $line) {
+    if ($line === '') {
+      continue;
+    }
+    $parts = explode("\t", $line);
+    if (!isset($parts[0])) {
+      continue;
+    }
+    $zpools[] = [
+      'name' => $parts[0],
+      'raw_size' => $parts[1] ?? '-',
+      'raw_alloc' => $parts[2] ?? '-',
+      'raw_free' => $parts[3] ?? '-',
+      'ckpoint' => $parts[4] ?? '-',
+      'expandsz' => $parts[5] ?? '-',
+      'frag' => $parts[6] ?? '-',
+      'cap' => $parts[7] ?? '-',
+      'dedup' => $parts[8] ?? '-',
+      'health' => $parts[9] ?? '-',
+      'altroot' => $parts[10] ?? '-',
+    ];
+  }
+
+  $zfs_list = get_zfs_list();
+  foreach ($zpools as &$pool) {
+    foreach ($zfs_list as $entry) {
+      if ($entry['name'] === $pool['name']) {
+        $pool['used'] = $entry['used'];
+        $pool['avail'] = $entry['avail'];
+        $pool['refer'] = $entry['refer'];
+        $pool['mountpoint'] = $entry['mountpoint'];
+      }
+    }
+    if (!isset($pool['used'])) {
+      $pool['used'] = '-';
+      $pool['avail'] = '-';
+      $pool['refer'] = '-';
+      $pool['mountpoint'] = '-';
+    }
+  }
+  unset($pool);
+
+  return $zpools;
+}
+
+function zpool_status_output($pool_name, $path_flag)
+{
+  $fixture = $path_flag ? 'zpool_status_path_' . $pool_name . '.txt' : 'zpool_status_' . $pool_name . '.txt';
+  $command = $path_flag ? ('zpool status -P ' . escapeshellarg($pool_name)) : ('zpool status ' . escapeshellarg($pool_name));
+  return command_output($command, $fixture);
+}
+
+function zpool_iostat_output($pool_name, $path_flag)
+{
+  $fixture = $path_flag ? 'zpool_iostat_path_' . $pool_name . '.txt' : 'zpool_iostat_' . $pool_name . '.txt';
+  $command = $path_flag ? ('zpool iostat -vP ' . escapeshellarg($pool_name)) : ('zpool iostat -v ' . escapeshellarg($pool_name));
+  return command_output($command, $fixture);
+}
+
+function collect_vdev_lines($output, $pattern)
+{
+  $matches = [];
+  preg_match_all($pattern, $output, $matches);
+  if (!isset($matches[0])) {
+    return '';
+  }
+  return trim(implode("\n", $matches[0]));
+}
+
+function zpool_status($pool_name)
+{
+  $output = zpool_status_output($pool_name, false);
+  if ($output === '') {
+    return [$pool_name => '', 'state' => 'UNKNOWN'];
+  }
+
+  $pattern = '/^\t{1}(\S+).*$\n(?:^\t{1} +.*$\n)+|^\t{1}(\S+).*$\n(?:^\t{1} +.*$\n)+/m';
+  $combined = collect_vdev_lines($output, $pattern);
+
+  $state = 'UNKNOWN';
+  if (preg_match('/^.*state:\s+(\S+)/m', $output, $match)) {
+    $state = $match[1];
+  }
+
+  return [
+    $pool_name => $combined,
+    'state' => $state,
+  ];
+}
+
+function zpool_iostat($pool_name)
+{
+  $output = zpool_iostat_output($pool_name, false);
+  if ($output === '') {
+    return [$pool_name => ''];
+  }
+  $pattern = '/^(\S+).*$\n(?:^ +.*$\n)+|^(\S+).*$\n(?:^ +.*$\n)+/m';
+  $combined = collect_vdev_lines($output, $pattern);
+  return [$pool_name => $combined];
+}
+
+function zpool_status_parse($status_obj, $key, $pool_name)
+{
+  if (!isset($status_obj[$key])) {
+    return [[], [], []];
+  }
+
+  $status_pattern = '/^\t{1}(\S+).*$\n(?:^\t{1} +.*$\n)+|^\t{1}(\S+).*$\n(?:^\t{1} +.*$\n)+/m';
+  $status_path_obj = [$key => collect_vdev_lines(zpool_status_output($pool_name, true), $status_pattern)];
+  $status_default = $status_obj[$key];
+  $status_path = $status_path_obj[$key] ?? '';
+
+  $default_lines = preg_split('/\r?\n/', trim($status_default));
+  $path_lines = preg_split('/\r?\n/', trim($status_path));
+
+  $vdevs = [];
+  $disks = [];
+  $counts = [];
+  $disk_count = 0;
+  $initial_disk = true;
+
+  $line_count = count($default_lines);
+  for ($i = 0; $i < $line_count; $i++) {
+    $default_line = $default_lines[$i];
+    $path_line = $path_lines[$i] ?? '';
+
+    $re_vdev_default = preg_match('/^\t\s{2}(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $default_line, $vdev_default_match);
+    $re_vdev_path = preg_match('/^\t\s{2}(\/dev\/\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $path_line, $vdev_path_match);
+    $re_disk_path = preg_match('/^\t\s{4}(\/dev\/\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $path_line, $disk_path_match);
+    $re_disk_default = preg_match('/^\t\s{4}(\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $default_line, $disk_default_match);
+
+    if ($re_vdev_default) {
+      $vdevs[] = [
+        'tag' => $key,
+        'name' => $vdev_default_match[1],
+        'state' => $vdev_default_match[2],
+        'read_errors' => $vdev_default_match[3],
+        'write_errors' => $vdev_default_match[4],
+        'checksum_errors' => $vdev_default_match[5],
+      ];
+
+      if ($re_vdev_path) {
+        $disks[] = [
+          'tag' => $key,
+          'name' => $vdev_default_match[1],
+          'state' => $vdev_default_match[2],
+          'read_errors' => $vdev_default_match[3],
+          'write_errors' => $vdev_default_match[4],
+          'checksum_errors' => $vdev_default_match[5],
+        ];
+        if (!$initial_disk) {
+          $counts[] = $disk_count;
+          $disk_count = 1;
+        } else {
+          $disk_count += 1;
+          $initial_disk = false;
+        }
+      } elseif (!$initial_disk) {
+        $counts[] = $disk_count;
+        $disk_count = 0;
+      }
+    }
+
+    if ($re_disk_path && $re_disk_default) {
+      $initial_disk = false;
+      $disks[] = [
+        'tag' => $key,
+        'name' => $disk_default_match[1],
+        'state' => $disk_default_match[2],
+        'read_errors' => $vdev_default_match[3] ?? $disk_default_match[3],
+        'write_errors' => $vdev_default_match[4] ?? $disk_default_match[4],
+        'checksum_errors' => $vdev_default_match[5] ?? $disk_default_match[5],
+      ];
+      $disk_count += 1;
+    }
+  }
+
+  $exception_match = '/^(\d+-\d+)(?:-part[0-9])/';
+  foreach ($disks as &$disk) {
+    if (preg_match($exception_match, $disk['name'], $match)) {
+      $disk['name'] = $match[1];
+    }
+  }
+  unset($disk);
+
+  $counts[] = $disk_count;
+  return [$vdevs, $disks, $counts];
+}
+
+function verify_zfs_device_format($status_obj, $pool_name)
+{
+  $alert = [];
+  if (!isset($status_obj[$pool_name])) {
+    return $alert;
+  }
+
+  $default_pattern = '/^\t    (\d+-\d+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m';
+  $unsupported_pattern = '/^\t    (\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m';
+
+  preg_match_all($default_pattern, $status_obj[$pool_name], $default_matches, PREG_SET_ORDER);
+  preg_match_all($unsupported_pattern, $status_obj[$pool_name], $unsupported_matches, PREG_SET_ORDER);
+
+  $default_disks = [];
+  foreach ($default_matches as $match) {
+    $default_disks[] = $match[1];
+  }
+
+  $unsupported_disks = [];
+  foreach ($unsupported_matches as $match) {
+    $unsupported_disks[] = $match[1];
+  }
+
+  if (count($unsupported_disks) > count($default_disks)) {
+    $filtered = array_values(array_diff($unsupported_disks, $default_disks));
+    $filtered = array_values(array_filter($filtered, function ($name) {
+      return !preg_match('/^(\d+-\d+)(?:-part[0-9])/', $name);
+    }));
+
+    $alert[] = "ZFS status displayed by this module for zpool '$pool_name' may be incomplete.\n\n";
+    $alert[] = "This module can only display zfs status information for devices that are created using a device alias.\n\n";
+    $alert[] = "This can be done using the 45Drives cockpit-zfs-manager package:\nhttps://github.com/45Drives/cockpit-zfs-manager/releases/\n\n";
+    if ($filtered) {
+      $alert[] = "The following zfs devices do not conform:\n";
+      foreach ($filtered as $disk) {
+        $alert[] = "\t  $disk\n";
+      }
+    }
+    $alert[] = "\n";
+  }
+
+  return $alert;
+}
+
+function zpool_iostat_parse($iostat_obj, $key, $pool_name)
+{
+  if (!isset($iostat_obj[$key])) {
+    return [[], [], []];
+  }
+
+  $iostat_pattern = '/^(\S+).*$\n(?:^ +.*$\n)+|^(\S+).*$\n(?:^ +.*$\n)+/m';
+  $iostat_path_obj = [$key => collect_vdev_lines(zpool_iostat_output($pool_name, true), $iostat_pattern)];
+  $iostat_default = $iostat_obj[$key];
+  $iostat_path = $iostat_path_obj[$key] ?? '';
+
+  $default_lines = preg_split('/\r?\n/', trim($iostat_default));
+  $path_lines = preg_split('/\r?\n/', trim($iostat_path));
+
+  $vdevs = [];
+  $disks = [];
+  $counts = [];
+  $disk_count = 0;
+  $initial_disk = true;
+
+  $line_count = count($default_lines);
+  for ($i = 0; $i < $line_count; $i++) {
+    $default_line = $default_lines[$i];
+    $path_line = $path_lines[$i] ?? '';
+
+    $re_vdev_default = preg_match('/^  (\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $default_line, $vdev_default_match);
+    $re_vdev_path = preg_match('/^  (\/dev\/\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $path_line, $vdev_path_match);
+    $re_disk_path = preg_match('/^    (\/dev\/\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $path_line, $disk_path_match);
+    $re_disk_default = preg_match('/^    (\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/', $default_line, $disk_default_match);
+
+    if ($re_vdev_default) {
+      $vdevs[] = [
+        'tag' => $key,
+        'raid_level' => $vdev_default_match[1],
+        'alloc' => $vdev_default_match[2],
+        'free' => $vdev_default_match[3],
+        'read_ops' => $vdev_default_match[4],
+        'write_ops' => $vdev_default_match[5],
+        'read_bw' => $vdev_default_match[6],
+        'write_bw' => $vdev_default_match[7],
+      ];
+      if ($re_vdev_path) {
+        $disks[] = [
+          'tag' => $key,
+          'name' => $vdev_default_match[1],
+          'alloc' => $vdev_default_match[2],
+          'free' => $vdev_default_match[3],
+          'read_ops' => $vdev_default_match[4],
+          'write_ops' => $vdev_default_match[5],
+          'read_bw' => $vdev_default_match[6],
+          'write_bw' => $vdev_default_match[7],
+        ];
+        $vdevs[count($vdevs) - 1]['raid_level'] = 'Disk';
+        if (!$initial_disk) {
+          $counts[] = $disk_count;
+          $disk_count = 1;
+        } else {
+          $disk_count += 1;
+          $initial_disk = false;
+        }
+      } elseif (!$initial_disk) {
+        $counts[] = $disk_count;
+        $disk_count = 0;
+      }
+    }
+
+    if ($re_disk_path && $re_disk_default) {
+      $initial_disk = false;
+      $disks[] = [
+        'tag' => $key,
+        'name' => $disk_default_match[1],
+        'alloc' => $disk_default_match[2],
+        'free' => $disk_default_match[3],
+        'read_ops' => $disk_default_match[4],
+        'write_ops' => $disk_default_match[5],
+        'read_bw' => $disk_default_match[6],
+        'write_bw' => $disk_default_match[7],
+      ];
+      $disk_count += 1;
+    }
+  }
+
+  $exception_match = '/^(\d+-\d+)(?:-part[0-9])/';
+  foreach ($disks as &$disk) {
+    if (preg_match($exception_match, $disk['name'], $match)) {
+      $disk['name'] = $match[1];
+    }
+  }
+  unset($disk);
+
+  $counts[] = $disk_count;
+  return [$vdevs, $disks, $counts];
+}
+
+function generate_zfs_info()
+{
+  $json_zfs = [
+    'zfs_installed' => false,
+  ];
+
+  if (!zfs_installed()) {
+    return $json_zfs;
+  }
+
+  $json_zfs['zfs_installed'] = true;
+  $json_zfs['zpools'] = get_zpool_list();
+  $json_zfs['warnings'] = [];
+
+  foreach ($json_zfs['zpools'] as &$pool) {
+    $status_output = zpool_status($pool['name']);
+    $iostat_output = zpool_iostat($pool['name']);
+    $pool['state'] = $status_output['state'] ?? 'UNKNOWN';
+    $pool['vdevs'] = [];
+
+    $alerts = verify_zfs_device_format($status_output, $pool['name']);
+    if ($alerts) {
+      $json_zfs['warnings'] = array_merge($json_zfs['warnings'], $alerts);
+    }
+
+    foreach ($status_output as $key => $value) {
+      if (!isset($iostat_output[$key])) {
+        continue;
+      }
+      [$status_vdevs, $status_disks, $status_counts] = zpool_status_parse($status_output, $key, $pool['name']);
+      [$iostat_vdevs, $iostat_disks, $iostat_counts] = zpool_iostat_parse($iostat_output, $key, $pool['name']);
+
+      if (!$status_disks || !$iostat_disks || !$status_counts || !$iostat_counts) {
+        continue;
+      }
+
+      $disk_index = 0;
+      $vdev_count = count($status_vdevs);
+      for ($i = 0; $i < $vdev_count; $i++) {
+        $status_vdevs[$i]['raid_level'] = $iostat_vdevs[$i]['raid_level'] ?? $status_vdevs[$i]['raid_level'];
+        $status_vdevs[$i]['alloc'] = $iostat_vdevs[$i]['alloc'] ?? '-';
+        $status_vdevs[$i]['free'] = $iostat_vdevs[$i]['free'] ?? '-';
+        $status_vdevs[$i]['read_ops'] = $iostat_vdevs[$i]['read_ops'] ?? '-';
+        $status_vdevs[$i]['write_ops'] = $iostat_vdevs[$i]['write_ops'] ?? '-';
+        $status_vdevs[$i]['read_bw'] = $iostat_vdevs[$i]['read_bw'] ?? '-';
+        $status_vdevs[$i]['write_bw'] = $iostat_vdevs[$i]['write_bw'] ?? '-';
+        $status_vdevs[$i]['disks'] = [];
+
+        $limit = $status_counts[$i] ?? 0;
+        for ($j = $disk_index; $j < $disk_index + $limit; $j++) {
+          $status_disks[$j]['alloc'] = $iostat_disks[$j]['alloc'] ?? '-';
+          $status_disks[$j]['free'] = $iostat_disks[$j]['free'] ?? '-';
+          $status_disks[$j]['read_ops'] = $iostat_disks[$j]['read_ops'] ?? '-';
+          $status_disks[$j]['write_ops'] = $iostat_disks[$j]['write_ops'] ?? '-';
+          $status_disks[$j]['read_bw'] = $iostat_disks[$j]['read_bw'] ?? '-';
+          $status_disks[$j]['write_bw'] = $iostat_disks[$j]['write_bw'] ?? '-';
+          $status_disks[$j]['vdev_idx'] = count($pool['vdevs']);
+          $status_vdevs[$i]['disks'][] = $status_disks[$j];
+        }
+
+        $pool['vdevs'][] = $status_vdevs[$i];
+        $disk_index += $limit;
+      }
+    }
+  }
+  unset($pool);
+
+  $disk_entries = [];
+  foreach ($json_zfs['zpools'] as $pool_index => $pool) {
+    if (!isset($pool['vdevs'])) {
+      continue;
+    }
+    foreach ($pool['vdevs'] as $vdev) {
+      foreach ($vdev['disks'] as $disk) {
+        $disk_entries[$disk['name']] = [
+          'zpool_name' => $pool['name'],
+          'zpool_used' => $pool['used'] ?? '-',
+          'zpool_avail' => $pool['avail'] ?? '-',
+          'zpool_mountpoint' => $pool['mountpoint'] ?? '-',
+          'zpool_state' => $pool['state'] ?? 'UNKNOWN',
+          'zpool_idx' => $pool_index,
+          'vdev_raid_level' => $vdev['raid_level'] ?? '-',
+          'vdev_alloc' => $vdev['alloc'] ?? '-',
+          'vdev_free' => $vdev['free'] ?? '-',
+          'vdev_read_ops' => $vdev['read_ops'] ?? '-',
+          'vdev_write_ops' => $vdev['write_ops'] ?? '-',
+          'vdev_read_bw' => $vdev['read_bw'] ?? '-',
+          'vdev_write_bw' => $vdev['write_bw'] ?? '-',
+          'name' => $disk['name'],
+          'alloc' => $disk['alloc'] ?? '-',
+          'free' => $disk['free'] ?? '-',
+          'read_ops' => $disk['read_ops'] ?? '-',
+          'write_ops' => $disk['write_ops'] ?? '-',
+          'read_bw' => $disk['read_bw'] ?? '-',
+          'write_bw' => $disk['write_bw'] ?? '-',
+          'vdev_idx' => $disk['vdev_idx'] ?? 0,
+          'state' => $disk['state'] ?? 'UNKNOWN',
+          'read_errors' => $disk['read_errors'] ?? '0',
+          'write_errors' => $disk['write_errors'] ?? '0',
+          'checksum_errors' => $disk['checksum_errors'] ?? '0',
+          'tag' => $disk['tag'] ?? $pool['name'],
+        ];
+      }
+    }
+  }
+  $json_zfs['zfs_disks'] = $disk_entries;
+
+  return $json_zfs;
+}
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/scripts/45d-generate-map">
+    <INLINE>
+<![CDATA[
+#!/usr/bin/php
+<?php
+$start_time = microtime(true);
+
+$output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
+$map_file = getenv('DRIVEMAP_OUTPUT_FILE') ?: ($output_dir . '/drivemap.json');
+$last_file = getenv('DRIVEMAP_LAST_FILE') ?: ($output_dir . '/drivemap.last');
+$log_file = getenv('DRIVEMAP_LOG_FILE') ?: ($output_dir . '/drivemap.log');
+$alias_file = getenv('DRIVEMAP_ALIAS_FILE') ?: '/etc/vdev_id.conf';
+$lsblk_source = getenv('DRIVEMAP_LSBLK') ?: '';
+$disks_ini_path = getenv('DRIVEMAP_DISKS_INI') ?: '/var/local/emhttp/disks.ini';
+$devs_ini_path = getenv('DRIVEMAP_DEVS_INI') ?: '/var/local/emhttp/devs.ini';
+$proc_partitions_path = getenv('DRIVEMAP_PROC_PARTITIONS') ?: '/proc/partitions';
+$sys_block_root = getenv('DRIVEMAP_SYS_BLOCK') ?: '/sys/block';
+$smartctl_dir = getenv('DRIVEMAP_SMARTCTL_DIR') ?: '';
+$disable_smart = getenv('DRIVEMAP_DISABLE_SMART') === '1';
+$default_server_info_generator = '/usr/local/emhttp/plugins/45d-drivemap/scripts/45d-generate-server-info';
+if (!is_file($default_server_info_generator)) {
+  $default_server_info_generator = __DIR__ . '/45d-generate-server-info';
+}
+$server_info_generator = getenv('DRIVEMAP_SERVER_INFO_GENERATOR') ?: $default_server_info_generator;
+
+@mkdir($output_dir, 0755, true);
+
+function script_command($script)
+{
+  if (!is_file($script)) {
+    return null;
+  }
+  $first_line = '';
+  $fh = @fopen($script, 'r');
+  if ($fh) {
+    $first_line = (string)fgets($fh);
+    fclose($fh);
+  }
+  $is_php = (bool)preg_match('/php/i', $first_line);
+  if ($is_php) {
+    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    return escapeshellarg($php) . ' ' . escapeshellarg($script);
+  }
+  if (is_executable($script)) {
+    return escapeshellarg($script);
+  }
+  return null;
+}
+
+if (is_file($server_info_generator)) {
+  $server_command = script_command($server_info_generator);
+  $server_output = [];
+  $server_code = 0;
+  if ($server_command !== null) {
+    exec($server_command . ' 2>&1', $server_output, $server_code);
+  }
+  if ($server_code !== 0 && $server_output) {
+    log_line($log_file, 'server_info generation failed: ' . implode(' | ', $server_output));
+  }
+}
+
+function log_line($path, $message)
+{
+  @file_put_contents($path, gmdate('c') . " " . $message . "\n", FILE_APPEND);
+}
+
+function format_bytes($bytes)
+{
+  if (!is_numeric($bytes)) {
+    return '';
+  }
+  $size = (float)$bytes;
+  if ($size <= 0) {
+    return '0 B';
+  }
+  $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  $idx = (int)floor(log($size, 1024));
+  $idx = min($idx, count($units) - 1);
+  $value = round($size / pow(1024, $idx), 2);
+  return $value . ' ' . $units[$idx];
+}
+
+function load_lsblk_map($lsblk_source)
+{
+  if ($lsblk_source !== '') {
+    if (is_file($lsblk_source)) {
+      $output = (string)@file_get_contents($lsblk_source);
+    } else {
+      $output = $lsblk_source;
+    }
+  } else {
+    $output = shell_exec('lsblk -P -b -o NAME,MODEL,SERIAL,SIZE,ROTA');
+  }
+  if (!$output) {
+    return [];
+  }
+  $map = [];
+  $lines = preg_split('/\r?\n/', trim($output));
+  foreach ($lines as $line) {
+    if ($line === '') {
+      continue;
+    }
+    $fields = [];
+    if (preg_match_all('/(\w+)="([^"]*)"/', $line, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $fields[$match[1]] = $match[2];
+      }
+    }
+    if (!isset($fields['NAME'])) {
+      continue;
+    }
+    $map[$fields['NAME']] = $fields;
+  }
+  return $map;
+}
+
+function load_disks_ini_map($paths)
+{
+  $sections = [];
+  foreach ($paths as $path) {
+    if (!is_file($path)) {
+      continue;
+    }
+    $ini = @parse_ini_file($path, true);
+    if (is_array($ini)) {
+      $sections = array_merge($sections, $ini);
+    }
+  }
+
+  $map = [];
+  foreach ($sections as $section) {
+    if (!is_array($section)) {
+      continue;
+    }
+    if (!isset($section['device'])) {
+      continue;
+    }
+    $device = (string)$section['device'];
+    if ($device === '') {
+      continue;
+    }
+    $map[$device] = $section;
+  }
+
+  return $map;
+}
+
+function count_partitions($device, $proc_partitions)
+{
+  if (!$device) {
+    return '';
+  }
+  $pattern = '/\b' . preg_quote($device, '/') . '(\d+|p\d+)\b/';
+  $count = 0;
+  foreach ($proc_partitions as $line) {
+    if (preg_match($pattern, $line)) {
+      $count++;
+    }
+  }
+  return (string)$count;
+}
+
+function disk_type($device, $lsblk_map, $disks_map, $sys_block_root)
+{
+  if (isset($lsblk_map[$device]['ROTA'])) {
+    return $lsblk_map[$device]['ROTA'] === '1' ? 'HDD' : 'SSD';
+  }
+  if (isset($disks_map[$device]['rotational'])) {
+    return $disks_map[$device]['rotational'] === '1' ? 'HDD' : 'SSD';
+  }
+  $rot_path = rtrim($sys_block_root, '/') . "/$device/queue/rotational";
+  if (is_file($rot_path)) {
+    $value = trim((string)@file_get_contents($rot_path));
+    if ($value === '1') {
+      return 'HDD';
+    }
+    if ($value === '0') {
+      return 'SSD';
+    }
+  }
+  return '';
+}
+
+function load_json_file($path)
+{
+  if (!is_file($path)) {
+    return null;
+  }
+  $contents = @file_get_contents($path);
+  if ($contents === false) {
+    return null;
+  }
+  $data = json_decode($contents, true);
+  return is_array($data) ? $data : null;
+}
+
+function load_server_info($output_dir)
+{
+  $paths = [
+    rtrim($output_dir, '/') . '/server_info.json',
+    '/etc/45drives/server_info/server_info.json',
+  ];
+  foreach ($paths as $path) {
+    $data = load_json_file($path);
+    if (is_array($data)) {
+      return $data;
+    }
+  }
+  return null;
+}
+
+function row_templates()
+{
+  return [
+    'H16' => [
+      'AV15' => [23],
+      'Q30' => [15, 23],
+      'S45' => [15, 15, 23],
+      'XL60' => [15, 15, 15, 23],
+    ],
+    'H32' => [
+      'Q30' => [15, 32],
+      'S45' => [15, 15, 32],
+      'XL60' => [15, 15, 15, 32],
+    ],
+    'STORINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'C8' => [4, 4],
+      'MI4' => [4],
+      'HL15' => [15],
+    ],
+    'STORINATORUBM' => [
+      'MI4_UBM' => [4],
+      'C8_UBM' => [8],
+    ],
+    'HOMELAB' => [
+      'HL15_BEAST' => [23],
+      'HL15' => [15],
+      'HL4' => [4],
+      'HL8' => [4, 4],
+    ],
+    'PROFESSIONAL' => [
+      'PRO15' => [15],
+      'PRO4' => [4],
+      'PRO8' => [4, 4],
+    ],
+    'STORNADO' => [
+      'AV15' => [32],
+      'F32' => [32],
+    ],
+    '2USTORNADO' => [
+      '2U' => [32],
+    ],
+    'F2STORNADO' => [
+      'F2' => [32],
+      'F16' => [16],
+      'VM4' => [4],
+      'VM8' => [8],
+      'VM16' => [16],
+      'VM32' => [32],
+    ],
+    'AV15-BASE' => [
+      'AV15' => [15],
+    ],
+    'DESTROYINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'F16' => [16],
+    ],
+    'F8' => [
+      'F8X1' => [20],
+      'F8X2' => [20, 20],
+      'F8X3' => [20, 20, 20],
+    ],
+    'SSG-6048R-E1CR24H' => [
+      'SSG-6048R-E1CR24H' => [4, 4, 4, 4, 4, 4],
+    ],
+    'HBA16' => [
+      '1X' => [16],
+      '2X' => [16, 16],
+      '3X' => [16, 16, 16],
+      '4X' => [16, 16, 16, 16],
+    ],
+    'STUDIO' => [
+      'STUDIO8' => [4, 4],
+    ],
+    'BYPATH' => [
+      'VM2' => [2],
+    ],
+  ];
+}
+
+function row_lengths_from_server_info($server_info)
+{
+  if (!is_array($server_info)) {
+    return null;
+  }
+  $style = isset($server_info['Alias Style']) ? strtoupper(trim((string)$server_info['Alias Style'])) : '';
+  $chassis = isset($server_info['Chassis Size']) ? strtoupper(trim((string)$server_info['Chassis Size'])) : '';
+  if ($style === '' || $chassis === '') {
+    return null;
+  }
+  $templates = row_templates();
+  if (!isset($templates[$style][$chassis])) {
+    return null;
+  }
+  return $templates[$style][$chassis];
+}
+
+function group_rows($slots, $row_lengths)
+{
+  if (is_array($row_lengths) && $row_lengths && array_sum($row_lengths) === count($slots)) {
+    $rows = [];
+    $offset = 0;
+    $count = count($slots);
+    foreach ($row_lengths as $length) {
+      if ($offset >= $count) {
+        break;
+      }
+      $chunk = array_slice($slots, $offset, (int)$length);
+      if ($chunk) {
+        $rows[] = $chunk;
+      }
+      $offset += (int)$length;
+    }
+    if ($offset < $count) {
+      $rows[] = array_slice($slots, $offset);
+    }
+    return $rows;
+  }
+
+  $rows_by_card = [];
+  foreach ($slots as $slot) {
+    if (!isset($slot['bay-id'])) {
+      continue;
+    }
+    [$card] = explode('-', $slot['bay-id'], 2);
+    $card = (int)$card;
+    if (!isset($rows_by_card[$card])) {
+      $rows_by_card[$card] = [];
+    }
+    $rows_by_card[$card][] = $slot;
+  }
+  ksort($rows_by_card);
+  return array_values($rows_by_card);
+}
+
+function decode_json_loose($text)
+{
+  $start = strpos($text, '{');
+  if ($start === false) {
+    return null;
+  }
+  $trimmed = substr($text, $start);
+  $decoded = json_decode($trimmed, true);
+  if (is_array($decoded)) {
+    return $decoded;
+  }
+  $end = strrpos($trimmed, '}');
+  if ($end !== false) {
+    $decoded = json_decode(substr($trimmed, 0, $end + 1), true);
+    if (is_array($decoded)) {
+      return $decoded;
+    }
+  }
+  return null;
+}
+
+function smart_data($dev_path, $smartctl_dir)
+{
+  if ($dev_path === '') {
+    return null;
+  }
+
+  $output = '';
+  if ($smartctl_dir !== '') {
+    $fixture_path = rtrim($smartctl_dir, '/') . '/' . basename($dev_path) . '.json';
+    if (is_file($fixture_path)) {
+      $output = (string)@file_get_contents($fixture_path);
+    }
+  }
+
+  if ($output === '') {
+    $command = 'smartctl -a ' . escapeshellarg($dev_path) . ' --json 2>/dev/null';
+    $output = (string)@shell_exec($command);
+  }
+
+  if ($output === '') {
+    return null;
+  }
+
+  $decoded = decode_json_loose($output);
+  if (!is_array($decoded)) {
+    return null;
+  }
+
+  $result = [
+    'model-family' => isset($decoded['model_family']) ? (string)$decoded['model_family'] : '',
+    'model-name' => isset($decoded['model_name']) ? (string)$decoded['model_name'] : '',
+    'serial' => isset($decoded['serial_number']) ? (string)$decoded['serial_number'] : '',
+    'capacity' => isset($decoded['user_capacity']['bytes']) ? format_bytes($decoded['user_capacity']['bytes']) : '',
+    'firm-ver' => isset($decoded['firmware_version']) ? (string)$decoded['firmware_version'] : '',
+    'rotation-rate' => isset($decoded['rotation_rate']) ? (string)$decoded['rotation_rate'] : '',
+    'start-stop-count' => '',
+    'power-cycle-count' => '',
+    'temp-c' => '',
+    'current-pending-sector' => '',
+    'offline-uncorrectable' => '',
+    'power-on-time' => '',
+    'health' => '',
+  ];
+
+  if (isset($decoded['ata_smart_attributes']['table']) && is_array($decoded['ata_smart_attributes']['table'])) {
+    foreach ($decoded['ata_smart_attributes']['table'] as $attribute) {
+      if (!is_array($attribute) || !isset($attribute['name'], $attribute['raw']['string'])) {
+        continue;
+      }
+      $name = (string)$attribute['name'];
+      $raw = trim((string)$attribute['raw']['string']);
+      if ($name === 'Start_Stop_Count') {
+        $result['start-stop-count'] = $raw;
+      } elseif ($name === 'Power_Cycle_Count') {
+        $result['power-cycle-count'] = $raw;
+      } elseif ($name === 'Temperature_Celsius') {
+        $temp = preg_split('/\s+/', $raw);
+        $result['temp-c'] = ($temp[0] ?? '') !== '' ? $temp[0] . ' C' : '';
+      } elseif ($name === 'Current_Pending_Sector') {
+        $result['current-pending-sector'] = $raw;
+      } elseif ($name === 'Offline_Uncorrectable') {
+        $result['offline-uncorrectable'] = $raw;
+      }
+    }
+  }
+
+  if ($result['temp-c'] === '' && isset($decoded['temperature']['current'])) {
+    $result['temp-c'] = (string)$decoded['temperature']['current'] . ' C';
+  }
+  if (isset($decoded['power_on_time']['hours'])) {
+    $result['power-on-time'] = (string)$decoded['power_on_time']['hours'];
+  }
+  if (isset($decoded['smart_status']['passed'])) {
+    $result['health'] = $decoded['smart_status']['passed'] ? 'OK' : 'POOR';
+  }
+
+  return $result;
+}
+
+function apply_smart_data(&$slot, $smart)
+{
+  if (!is_array($smart)) {
+    return;
+  }
+  foreach ($smart as $field => $value) {
+    if (!array_key_exists($field, $slot)) {
+      continue;
+    }
+    if ($value === '' || $value === null) {
+      continue;
+    }
+    $slot[$field] = $value;
+  }
+}
+
+function parse_aliases($alias_file)
+{
+  if (!is_file($alias_file)) {
+    return [];
+  }
+  $alias_lines = file($alias_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  if (!is_array($alias_lines)) {
+    return [];
+  }
+  $aliases = [];
+  foreach ($alias_lines as $line) {
+    $line = trim($line);
+    if ($line === '' || strpos($line, '#') === 0) {
+      continue;
+    }
+    if (preg_match('/^alias\s+(\d+)-(\d+)\s+(\S+)/', $line, $matches)) {
+      $aliases[] = [
+        'card' => (int)$matches[1],
+        'drive' => (int)$matches[2],
+        'path' => $matches[3],
+      ];
+    }
+  }
+  usort($aliases, function ($left, $right) {
+    if ($left['card'] === $right['card']) {
+      return $left['drive'] <=> $right['drive'];
+    }
+    return $left['card'] <=> $right['card'];
+  });
+  return $aliases;
+}
+
+function derive_meta($server_info)
+{
+  $meta = [
+    'disk-controller' => '',
+    'driver-version' => '',
+    'firmware-version' => '',
+  ];
+  if (!is_array($server_info) || !isset($server_info['HBA']) || !is_array($server_info['HBA'])) {
+    return $meta;
+  }
+
+  $controllers = [];
+  $drivers = [];
+  $firmware = [];
+  foreach ($server_info['HBA'] as $hba) {
+    if (!is_array($hba)) {
+      continue;
+    }
+    if (!empty($hba['Model'])) {
+      $controllers[] = (string)$hba['Model'];
+    }
+    if (!empty($hba['Driver Version'])) {
+      $drivers[] = (string)$hba['Driver Version'];
+    } elseif (!empty($hba['Kernel Driver'])) {
+      $drivers[] = (string)$hba['Kernel Driver'];
+    }
+    if (!empty($hba['Firmware Version'])) {
+      $firmware[] = (string)$hba['Firmware Version'];
+    }
+  }
+
+  if ($controllers) {
+    $meta['disk-controller'] = implode(', ', array_values(array_unique($controllers)));
+  }
+  if ($drivers) {
+    $meta['driver-version'] = implode(', ', array_values(array_unique($drivers)));
+  }
+  if ($firmware) {
+    $meta['firmware-version'] = implode(', ', array_values(array_unique($firmware)));
+  }
+
+  return $meta;
+}
+
+if (!is_file($alias_file)) {
+  log_line($log_file, "Missing alias file: $alias_file");
+  fwrite(STDERR, "Missing alias file: $alias_file\n");
+  exit(1);
+}
+
+$aliases = parse_aliases($alias_file);
+if (!$aliases) {
+  log_line($log_file, 'No aliases found in vdev_id.conf');
+  fwrite(STDERR, "No aliases found in vdev_id.conf\n");
+  exit(1);
+}
+
+$lsblk_map = load_lsblk_map($lsblk_source);
+$disks_map = load_disks_ini_map([$disks_ini_path, $devs_ini_path]);
+$proc_partitions = @file($proc_partitions_path, FILE_IGNORE_NEW_LINES) ?: [];
+$slots = [];
+foreach ($aliases as $alias) {
+  $card = $alias['card'];
+  $drive = $alias['drive'];
+  $path = $alias['path'];
+  $bay_id = $card . '-' . $drive;
+
+  $slot = [
+    'dev-by-path' => $path,
+    'bay-id' => $bay_id,
+    'occupied' => false,
+    'dev' => '',
+    'partitions' => '',
+    'model-family' => '',
+    'model-name' => '',
+    'serial' => '',
+    'capacity' => '',
+    'firm-ver' => '',
+    'rotation-rate' => '',
+    'start-stop-count' => '',
+    'power-cycle-count' => '',
+    'temp-c' => '',
+    'current-pending-sector' => '',
+    'offline-uncorrectable' => '',
+    'power-on-time' => '',
+    'health' => '',
+    'disk_type' => '',
+  ];
+
+  if (is_link($path)) {
+    $slot['occupied'] = true;
+    $real = realpath($path);
+    if ($real) {
+      $slot['dev'] = $real;
+      $device = basename($real);
+      $slot['partitions'] = count_partitions($device, $proc_partitions);
+
+      if (isset($lsblk_map[$device])) {
+        $info = $lsblk_map[$device];
+        $slot['model-name'] = $info['MODEL'] ?? '';
+        $slot['serial'] = $info['SERIAL'] ?? '';
+        $slot['capacity'] = isset($info['SIZE']) ? format_bytes($info['SIZE']) : '';
+      }
+
+      if (isset($disks_map[$device])) {
+        $disk = $disks_map[$device];
+        if (!$slot['serial'] && !empty($disk['id'])) {
+          $slot['serial'] = (string)$disk['id'];
+        }
+        if (!$slot['capacity'] && isset($disk['sectors'], $disk['sector_size'])) {
+          $slot['capacity'] = format_bytes((float)$disk['sectors'] * (float)$disk['sector_size']);
+        }
+        if (!empty($disk['temp']) && $disk['temp'] !== '*') {
+          $slot['temp-c'] = trim((string)$disk['temp']) . ' C';
+        }
+      }
+
+      $slot['disk_type'] = disk_type($device, $lsblk_map, $disks_map, $sys_block_root);
+
+      if (!$disable_smart) {
+        apply_smart_data($slot, smart_data($slot['dev'], $smartctl_dir));
+      }
+    }
+  }
+  $slots[] = $slot;
+}
+
+$server_info = load_server_info($output_dir);
+$row_lengths = row_lengths_from_server_info($server_info);
+$rows = group_rows($slots, $row_lengths);
+$meta = derive_meta($server_info);
+
+$duration = microtime(true) - $start_time;
+$timestamp = gmdate('c');
+
+$payload = [
+  'rows' => $rows,
+  'meta' => $meta,
+  'lsdevDuration' => round($duration, 2),
+  'lastUpdated' => $timestamp,
+];
+
+file_put_contents($map_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+file_put_contents($last_file, $timestamp . "\n");
+log_line($log_file, 'generated map');
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/scripts/45d-generate-server-info">
+    <INLINE>
+<![CDATA[
+#!/usr/bin/php
+<?php
+$output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
+$output_file = getenv('DRIVEMAP_SERVER_INFO_OUTPUT') ?: ($output_dir . '/server_info.json');
+$source_file = getenv('DRIVEMAP_SERVER_INFO_INPUT') ?: '/etc/45drives/server_info/server_info.json';
+$vendor_server_identifier = getenv('DRIVEMAP_VENDOR_SERVER_IDENTIFIER') ?: '/opt/45drives/tools/server_identifier';
+$alias_file = getenv('DRIVEMAP_ALIAS_FILE') ?: '/etc/vdev_id.conf';
+$force_model = getenv('DRIVEMAP_SERVER_MODEL') ?: '';
+$force_chassis = getenv('DRIVEMAP_CHASSIS_SIZE') ?: '';
+$force_alias = getenv('DRIVEMAP_ALIAS_STYLE') ?: '';
+$force_serial = getenv('DRIVEMAP_SERVER_SERIAL') ?: '';
+$force_prefix = getenv('DRIVEMAP_SERVER_PREFIX') ?: '';
+$log_file = getenv('DRIVEMAP_LOG_FILE') ?: ($output_dir . '/drivemap.log');
+
+@mkdir($output_dir, 0755, true);
+
+function log_line($path, $message)
+{
+  @file_put_contents($path, gmdate('c') . " " . $message . "\n", FILE_APPEND);
+}
+
+function read_first_value($paths)
+{
+  foreach ($paths as $path) {
+    if (is_file($path)) {
+      $value = trim((string)@file_get_contents($path));
+      if ($value !== '' && $value !== 'None') {
+        return $value;
+      }
+    }
+  }
+  return '';
+}
+
+function alias_templates()
+{
+  return [
+    'H16' => [
+      'AV15' => [23],
+      'Q30' => [15, 23],
+      'S45' => [15, 15, 23],
+      'XL60' => [15, 15, 15, 23],
+    ],
+    'H32' => [
+      'Q30' => [15, 32],
+      'S45' => [15, 15, 32],
+      'XL60' => [15, 15, 15, 32],
+    ],
+    'STORINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'C8' => [4, 4],
+      'MI4' => [4],
+    ],
+    'HOMELAB' => [
+      'HL4' => [4],
+      'HL8' => [4, 4],
+      'HL15' => [15],
+      'HL15_BEAST' => [23],
+    ],
+    'PROFESSIONAL' => [
+      'PRO4' => [4],
+      'PRO8' => [4, 4],
+      'PRO15' => [15],
+    ],
+    'F8' => [
+      'F8X1' => [20],
+      'F8X2' => [20, 20],
+      'F8X3' => [20, 20, 20],
+    ],
+    'STUDIO' => [
+      'STUDIO8' => [4, 4],
+    ],
+    'BYPATH' => [
+      'VM2' => [2],
+    ],
+  ];
+}
+
+function alias_summary($alias_file)
+{
+  if (!is_file($alias_file)) {
+    return ['rows' => [], 'total' => 0];
+  }
+  $lines = file($alias_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  if (!is_array($lines)) {
+    return ['rows' => [], 'total' => 0];
+  }
+
+  $counts = [];
+  $total = 0;
+  foreach ($lines as $line) {
+    $line = trim($line);
+    if ($line === '' || strpos($line, '#') === 0) {
+      continue;
+    }
+    if (preg_match('/^alias\s+(\d+)-(\d+)\s+(\S+)/', $line, $matches)) {
+      $card = (int)$matches[1];
+      if (!isset($counts[$card])) {
+        $counts[$card] = 0;
+      }
+      $counts[$card]++;
+      $total++;
+    }
+  }
+  ksort($counts);
+  return ['rows' => array_values($counts), 'total' => $total];
+}
+
+function prefix_hint($prefix)
+{
+  $prefix = strtolower($prefix);
+  if ($prefix === 'homelab') {
+    return 'HOMELAB';
+  }
+  if ($prefix === 'professional') {
+    return 'PROFESSIONAL';
+  }
+  if ($prefix === 'studio') {
+    return 'STUDIO';
+  }
+  return '';
+}
+
+function infer_layout_from_aliases($alias_file, $prefix)
+{
+  $summary = alias_summary($alias_file);
+  $rows = $summary['rows'];
+  $total = $summary['total'];
+  if (!$rows) {
+    return ['style' => '', 'chassis' => ''];
+  }
+
+  $templates = alias_templates();
+  $candidates = [];
+  foreach ($templates as $style => $chassis_map) {
+    foreach ($chassis_map as $chassis => $lengths) {
+      if ($lengths === $rows) {
+        $candidates[] = ['style' => $style, 'chassis' => $chassis];
+      }
+    }
+  }
+
+  if ($candidates) {
+    $hint = prefix_hint($prefix);
+    if ($hint !== '') {
+      foreach ($candidates as $candidate) {
+        if ($candidate['style'] === $hint) {
+          return $candidate;
+        }
+      }
+    }
+    foreach ($candidates as $candidate) {
+      if ($candidate['style'] === 'STORINATOR') {
+        return $candidate;
+      }
+    }
+    return $candidates[0];
+  }
+
+  $simple_map = [
+    2 => ['BYPATH', 'VM2'],
+    8 => ['F8', 'F8X1'],
+    15 => ['STORINATOR', 'AV15'],
+    16 => ['STORINATOR', 'Q30'],
+    20 => ['F8', 'F8X1'],
+    23 => ['H16', 'AV15'],
+    30 => ['STORINATOR', 'Q30'],
+    32 => ['H32', 'Q30'],
+    45 => ['STORINATOR', 'S45'],
+    60 => ['STORINATOR', 'XL60'],
+  ];
+  if (isset($simple_map[$total])) {
+    return ['style' => $simple_map[$total][0], 'chassis' => $simple_map[$total][1]];
+  }
+
+  return ['style' => '', 'chassis' => ''];
+}
+
+function infer_prefix($product_name)
+{
+  $product_name = strtolower($product_name);
+  $prefixes = [
+    'stornado' => 'Stornado',
+    'proxinator' => 'Proxinator',
+    'destroyinator' => 'Destroyinator',
+    'homelab' => 'HomeLab',
+    'professional' => 'Professional',
+    'studio' => 'Studio',
+  ];
+  foreach ($prefixes as $needle => $prefix) {
+    if (strpos($product_name, $needle) !== false) {
+      return $prefix;
+    }
+  }
+  return 'Storinator';
+}
+
+function model_from_parts($prefix, $style, $chassis)
+{
+  if ($chassis === '' || $chassis === '?') {
+    return $prefix;
+  }
+  if ($style === 'H16' || $style === 'H32') {
+    return $prefix . '-' . $style . '-' . $chassis;
+  }
+  return $prefix . '-' . $chassis;
+}
+
+if (is_file($source_file)) {
+  @copy($source_file, $output_file);
+  log_line($log_file, 'server_info copied from ' . $source_file);
+  exit(0);
+}
+
+$vendor_output = [];
+$vendor_code = 0;
+if (is_executable($vendor_server_identifier)) {
+  exec(escapeshellarg($vendor_server_identifier) . ' 2>&1', $vendor_output, $vendor_code);
+  if ($vendor_code === 0 && is_file($source_file)) {
+    @copy($source_file, $output_file);
+    log_line($log_file, 'server_info copied after server_identifier run');
+    exit(0);
+  }
+  if ($vendor_output) {
+    log_line($log_file, 'server_identifier output: ' . implode(' | ', $vendor_output));
+  }
+}
+
+$product_name = read_first_value([
+  '/sys/class/dmi/id/product_name',
+  '/sys/class/dmi/id/board_name',
+]);
+$serial = $force_serial !== '' ? $force_serial : read_first_value([
+  '/sys/class/dmi/id/product_serial',
+  '/sys/class/dmi/id/chassis_serial',
+  '/sys/class/dmi/id/board_serial',
+]);
+$prefix = $force_prefix !== '' ? $force_prefix : infer_prefix($product_name);
+$layout = infer_layout_from_aliases($alias_file, $prefix);
+
+$chassis = $force_chassis !== '' ? $force_chassis : ($layout['chassis'] !== '' ? $layout['chassis'] : '?');
+$alias_style = $force_alias !== '' ? strtoupper($force_alias) : ($layout['style'] !== '' ? $layout['style'] : 'STORINATOR');
+$chassis = strtoupper($chassis);
+
+$model = $force_model !== '' ? $force_model : model_from_parts($prefix, $alias_style, $chassis);
+
+$server_info = [
+  'Model' => $model !== '' ? $model : '?',
+  'Chassis Size' => $chassis !== '' ? $chassis : '?',
+  'Alias Style' => $alias_style !== '' ? $alias_style : '?',
+  'Serial' => $serial !== '' ? $serial : '?',
+  'HBA' => [],
+];
+
+file_put_contents($output_file, json_encode($server_info, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+log_line($log_file, 'server_info generated');
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/assets/45d/drivemap.css">
+    <INLINE>
+<![CDATA[
+.drivemap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drivemap-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.drivemap-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.drivemap-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.drivemap-error {
+  padding: 8px 12px;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  border-radius: 4px;
+}
+
+.drivemap-canvas {
+  border: 1px solid #d1d5db;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 16px;
+  min-height: 360px;
+  position: relative;
+}
+
+.drivemap-grid {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+}
+
+.drivemap-bay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.drivemap-bay.occupied {
+  background: #dcfce7;
+  border-color: #4ade80;
+}
+
+.drivemap-bay .bay-label {
+  font-weight: 600;
+}
+
+.drivemap-bay .bay-device {
+  font-size: 10px;
+  color: #475569;
+}
+
+.drivemap-details {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2937;
+  min-height: 38px;
+}
+
+.drivemap-details .label {
+  font-weight: 600;
+  margin-right: 6px;
+}
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/assets/45d/drivemap.js">
+    <INLINE>
+<![CDATA[
+(function () {
+  if (typeof $ === 'undefined') {
+    return;
+  }
+
+  var root = document.getElementById('drive-map-app');
+  if (!root) {
+    return;
+  }
+
+  var apiBase = root.getAttribute('data-api') || '';
+  var canvas = document.getElementById('drivemap-canvas');
+  var statusEl = document.getElementById('drivemap-status');
+  var errorEl = document.getElementById('drivemap-error');
+  var detailsEl = document.getElementById('drivemap-details');
+  var refreshBtn = document.getElementById('drivemap-refresh');
+
+  function setStatus(text) {
+    if (statusEl) {
+      statusEl.textContent = text;
+    }
+  }
+
+  function setError(text) {
+    if (!errorEl) {
+      return;
+    }
+
+    if (text) {
+      errorEl.textContent = text;
+      errorEl.style.display = 'block';
+    } else {
+      errorEl.textContent = '';
+      errorEl.style.display = 'none';
+    }
+  }
+
+  function setDetails(text) {
+    if (!detailsEl) {
+      return;
+    }
+
+    detailsEl.textContent = text;
+  }
+
+  function layoutFromRows(rows) {
+    var rowCount = Array.isArray(rows) ? rows.length : 0;
+    var colCount = 0;
+    var i;
+    var row;
+
+    for (i = 0; i < rowCount; i++) {
+      row = rows[i];
+      if (Array.isArray(row) && row.length > colCount) {
+        colCount = row.length;
+      }
+    }
+
+    return { rows: rowCount || 1, cols: colCount || 1 };
+  }
+
+  function formatDetails(bay) {
+    if (!bay) {
+      return 'Select a bay to see drive details.';
+    }
+
+    var label = bay['bay-id'] || 'Bay';
+    if (!bay.occupied) {
+      return label + ': Empty';
+    }
+
+    var parts = [label + ':'];
+    if (bay.dev) {
+      parts.push(bay.dev);
+    }
+    if (bay.serial) {
+      parts.push('Serial ' + bay.serial);
+    }
+    if (bay['model-name']) {
+      parts.push(bay['model-name']);
+    }
+    if (bay.capacity) {
+      parts.push(bay.capacity);
+    }
+    if (bay['temp-c']) {
+      parts.push('Temp ' + bay['temp-c']);
+    }
+    if (bay.health) {
+      parts.push('Health ' + bay.health);
+    }
+
+    return parts.join(' | ');
+  }
+
+  function renderMap(data) {
+    if (!data || !Array.isArray(data.rows)) {
+      setStatus('');
+      setError('Drive map data is unavailable.');
+      return;
+    }
+
+    setError('');
+
+    var statusParts = [];
+    var duration;
+    if (data.lastUpdated) {
+      statusParts.push('Last updated: ' + data.lastUpdated);
+    }
+    if (data.lsdevDuration) {
+      duration = parseFloat(data.lsdevDuration);
+      if (!isNaN(duration)) {
+        statusParts.push('lsdev: ' + duration.toFixed(2) + 's');
+      }
+    }
+    setStatus(statusParts.join(' | '));
+
+    if (!canvas) {
+      return;
+    }
+
+    canvas.innerHTML = '';
+
+    var layout = layoutFromRows(data.rows);
+    var rows = parseInt(layout.rows, 10) || 1;
+    var cols = parseInt(layout.cols, 10) || 1;
+    canvas.style.backgroundImage = 'none';
+
+    var grid = document.createElement('div');
+    grid.className = 'drivemap-grid';
+    grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
+    grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+
+    data.rows.forEach(function (row, rowIndex) {
+      if (!Array.isArray(row)) {
+        return;
+      }
+
+      row.forEach(function (bay, colIndex) {
+        var slot = bay || {};
+        var bayEl = document.createElement('div');
+        bayEl.className = 'drivemap-bay' + (slot.occupied ? ' occupied' : '');
+        bayEl.style.gridRow = String(rowIndex + 1);
+        bayEl.style.gridColumn = String(colIndex + 1);
+
+        var labelEl = document.createElement('div');
+        labelEl.className = 'bay-label';
+        labelEl.textContent = slot['bay-id'] || 'Bay';
+        bayEl.appendChild(labelEl);
+
+        var deviceEl = document.createElement('div');
+        deviceEl.className = 'bay-device';
+        if (slot.occupied) {
+          deviceEl.textContent = slot.dev || slot['dev-by-path'] || 'Occupied';
+        } else {
+          deviceEl.textContent = 'Empty';
+        }
+        bayEl.appendChild(deviceEl);
+
+        bayEl.addEventListener('click', function () {
+          setDetails(formatDetails(slot));
+        });
+
+        grid.appendChild(bayEl);
+      });
+    });
+
+    canvas.appendChild(grid);
+
+    if (detailsEl && detailsEl.textContent === '') {
+      setDetails('Select a bay to see drive details.');
+    }
+  }
+
+  function fetchMap() {
+    if (!apiBase) {
+      setError('Drive map API is not configured.');
+      return;
+    }
+
+    setStatus('Loading map...');
+    setError('');
+
+    $.getJSON(apiBase + '?action=drivemap&ts=' + Date.now())
+      .done(function (data) {
+        renderMap(data);
+      })
+      .fail(function () {
+        setStatus('');
+        setError('Unable to load drive map.');
+      });
+  }
+
+  function refreshMap() {
+    if (!apiBase) {
+      return;
+    }
+
+    setStatus('Refreshing map...');
+    $.post(apiBase + '?action=refresh')
+      .always(function () {
+        fetchMap();
+      });
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', refreshMap);
+  }
+
+  $(fetchMap);
+})();
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/assets/45d/README.md">
+    <INLINE>
+<![CDATA[
+This directory contains vendored 45drives-disks frontend assets.
+
+- `45drives-disks/` holds a prebuilt Cockpit module release snapshot (v2.5.4-2).
+- `45drives-disks/index.html` is patched to shim Cockpit APIs and route process
+  calls to `/plugins/45d-drivemap/php/api.php` on Unraid.
+- `drivemap.js` and `drivemap.css` remain as a lightweight fallback renderer.
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/vendor/45drives/README.md">
+    <INLINE>
+<![CDATA[
+This directory will hold vendored 45Drives tooling (dmap/lsdev port, bay generator
+logic, and templates) once pulled from the upstream repositories.
+
+Keep upstream snapshots minimal and document any Unraid-specific patches here.
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Run="/bin/bash" Method="install">
+    <INLINE>
+<![CDATA[
+set -e
+
+MAINNAME="&name;"
+PLUGIN_DIR="/usr/local/emhttp/plugins/${MAINNAME}"
+ASSETS_FILE="&assets_source;"
+ASSETS_DIR="${PLUGIN_DIR}/assets/45d/45drives-disks"
+
+chmod +x "${PLUGIN_DIR}/scripts/45d-generate-map" || true
+chmod +x "${PLUGIN_DIR}/scripts/45d-generate-server-info" || true
+mkdir -p /var/local/45d
+
+if [ -f "${ASSETS_FILE}" ]; then
+  rm -rf "${ASSETS_DIR}"
+  tar -xf "${ASSETS_FILE}" -C /
+fi
+]]>
+    </INLINE>
+  </FILE>
+
+</PLUGIN>
