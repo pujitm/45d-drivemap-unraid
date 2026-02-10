@@ -33,7 +33,25 @@ rm -f \
 
 mkdir -p "${PACKAGE_DIR}"
 rm -f "${PACKAGE_PATH}"
-tar -C "${STAGE_DIR}" -cJf "${PACKAGE_PATH}" .
+
+# Keep package metadata Linux-friendly when building on macOS.
+export COPYFILE_DISABLE=1
+
+TAR_CREATE_ARGS=(-cJf "${PACKAGE_PATH}")
+if tar --version 2>/dev/null | head -n 1 | grep -qi "gnu tar"; then
+  TAR_CREATE_ARGS+=(--owner=0 --group=0 --numeric-owner --no-acls --no-xattrs)
+else
+  TAR_CREATE_ARGS+=(--uid 0 --gid 0 --uname root --gname root --no-acls --no-fflags --no-mac-metadata --no-xattrs)
+fi
+
+tar -C "${STAGE_DIR}" "${TAR_CREATE_ARGS[@]}" ./usr
+
+# Guard against archiving the staging root itself (./), which can clobber /
+# permissions when extracting with -C /.
+if tar -tf "${PACKAGE_PATH}" | grep -Eq '^\.?/?$|^\./$'; then
+  echo "Refusing to publish package containing top-level ./ entry" >&2
+  exit 1
+fi
 
 SHA256=$(shasum -a 256 "${PACKAGE_PATH}" | awk '{print $1}')
 printf '%s\n' "${PACKAGE_PATH}"

@@ -13,7 +13,7 @@
   launch="Drive Map" min="6.12.0" icon="th">
 
   <CHANGES>
-    - packaged release flow using GitHub release assets
+__CHANGES__
   </CHANGES>
 
   <FILE Name="&package_source;">
@@ -35,11 +35,32 @@ mkdir -p /var/local/45d
 
 if [ -f "${PACKAGE_FILE}" ]; then
   rm -rf "${PLUGIN_DIR}"
-  tar -xf "${PACKAGE_FILE}" -C /
+  tar --no-overwrite-dir -xf "${PACKAGE_FILE}" -C /
 fi
 
 chmod +x "${PLUGIN_DIR}/scripts/45d-generate-map" || true
 chmod +x "${PLUGIN_DIR}/scripts/45d-generate-server-info" || true
+]]>
+    </INLINE>
+  </FILE>
+
+  <FILE Run="/bin/bash" Method="remove">
+    <INLINE>
+<![CDATA[
+set -e
+
+MAINNAME="45d-drivemap"
+PLUGIN_DIR="/usr/local/emhttp/plugins/${MAINNAME}"
+STATE_DIR="/var/local/45d"
+BOOT_DIR="/boot/config/plugins/${MAINNAME}"
+
+rm -rf "${PLUGIN_DIR}"
+rm -rf "${STATE_DIR}"
+
+if [ -d "${BOOT_DIR}" ]; then
+  rm -f "${BOOT_DIR}"/45d-drivemap-*.txz
+  rmdir "${BOOT_DIR}" 2>/dev/null || true
+fi
 ]]>
     </INLINE>
   </FILE>
