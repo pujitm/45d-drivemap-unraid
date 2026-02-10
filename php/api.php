@@ -16,6 +16,17 @@ if (!is_file($default_server_info_generator)) {
   $default_server_info_generator = dirname(__DIR__) . '/scripts/45d-generate-server-info';
 }
 $server_info_generator = getenv('DRIVEMAP_SERVER_INFO_GENERATOR') ?: $default_server_info_generator;
+$refresh_seconds = getenv('DRIVEMAP_REFRESH_SECONDS');
+if ($refresh_seconds === false || $refresh_seconds === '') {
+  // Default to always attempt regeneration on read; fall back to cached data
+  // if generation fails.
+  $refresh_seconds = 0;
+} else {
+  $refresh_seconds = (int)$refresh_seconds;
+}
+if ($refresh_seconds < 0) {
+  $refresh_seconds = 0;
+}
 $server_info_paths = [];
 $server_info_override = getenv('DRIVEMAP_SERVER_INFO');
 if ($server_info_override) {
@@ -164,18 +175,58 @@ function run_server_info_generator($generator, $log_file)
   return run_script($generator, $log_file, 'Server info generator not found');
 }
 
+function should_refresh_map($map_file, $refresh_seconds)
+{
+  if (!is_file($map_file)) {
+    return true;
+  }
+  if ($refresh_seconds <= 0) {
+    return true;
+  }
+  $age = time() - filemtime($map_file);
+  return $age >= $refresh_seconds;
+}
+
+function ensure_map_data($map_file, $generator, $log_file, $refresh_seconds)
+{
+  $cached = load_json($map_file);
+  $has_cached = is_array($cached);
+
+  if (!should_refresh_map($map_file, $refresh_seconds)) {
+    if ($has_cached) {
+      return ['ok' => true, 'data' => $cached];
+    }
+    return ['ok' => false, 'error' => 'Drive map data unavailable'];
+  }
+
+  $result = run_generator($generator, $log_file);
+  if (!$result['ok']) {
+    if ($has_cached) {
+      return ['ok' => true, 'data' => $cached, 'stale' => true];
+    }
+    return $result;
+  }
+
+  $fresh = load_json($map_file);
+  if (is_array($fresh)) {
+    return ['ok' => true, 'data' => $fresh];
+  }
+
+  if ($has_cached) {
+    return ['ok' => true, 'data' => $cached, 'stale' => true];
+  }
+
+  return ['ok' => false, 'error' => 'Drive map data unavailable'];
+}
+
 $action = $_REQUEST['action'] ?? 'drivemap';
 
 if ($action === 'drivemap' || $action === 'lsdev') {
-  // Lazily generate map data on first request (or after cache deletion).
-  $data = load_json($map_file);
-  if ($data === null) {
-    $result = run_generator($generator, $log_file);
-    if (!$result['ok']) {
-      respond_json($result, 500);
-    }
-    $data = load_json($map_file);
+  $result = ensure_map_data($map_file, $generator, $log_file, $refresh_seconds);
+  if (!$result['ok']) {
+    respond_json($result, 500);
   }
+  $data = $result['data'];
   if ($data === null) {
     respond_json(['error' => 'Drive map data unavailable'], 500);
   }
@@ -184,14 +235,11 @@ if ($action === 'drivemap' || $action === 'lsdev') {
 
 if ($action === 'disk_info') {
   // Legacy "disk_info" consumers expect a flattened list of bays.
-  $data = load_json($map_file);
-  if ($data === null) {
-    $result = run_generator($generator, $log_file);
-    if (!$result['ok']) {
-      respond_json($result, 500);
-    }
-    $data = load_json($map_file);
+  $result = ensure_map_data($map_file, $generator, $log_file, $refresh_seconds);
+  if (!$result['ok']) {
+    respond_json($result, 500);
   }
+  $data = $result['data'];
   if (!$data || !isset($data['rows'])) {
     respond_json(['error' => 'Drive map data unavailable'], 500);
   }

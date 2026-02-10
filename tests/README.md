@@ -6,6 +6,18 @@ Run the generator + API parity checks:
 php tests/run.php
 ```
 
+Run the non-45d smoke suite (no Python required):
+
+```bash
+php tests/remote_smoke.php
+```
+
+Run smoke with a custom alias fixture simulation:
+
+```bash
+php tests/remote_smoke.php --simulate-fixture tests/fixtures/vdev_id_h16_q30.conf
+```
+
 The test harness uses fixtures under `tests/fixtures` and overrides generator/API
 paths through environment variables, so it is safe to run on non-Unraid hosts.
 
@@ -20,6 +32,8 @@ Coverage includes:
 - deterministic output checks + unsupported-style failure checks
 - upstream template extraction helper: `tests/vendor_template.py`
 - upstream dmap case helper: `tests/vendor_dmap_case.py`
+- non-45d remote smoke harness entrypoint: `tests/remote_smoke.php`
+- custom fixture simulation mode for non-45d harness validation
 
 Additional fixture files:
 - `tests/fixtures/vdev_id_h16_q30.conf`

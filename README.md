@@ -44,3 +44,7 @@ Removing the plugin cleans up:
 - Changelog management: `CHANGELOG.md` + `knope.toml`
 - Test suite:
   - `php tests/run.php`
+  - `php tests/remote_smoke.php` (non-45d / no-python smoke)
+- Remote dev harness (SSH + rsync/scp):
+  - `dev/remote-test-harness.sh --host root@<unraid-ip>`
+  - details in `dev/README.md`

@@ -29,6 +29,14 @@ cp -a \
   "${ROOT_DIR}/scripts" \
   "${TARGET_DIR}/"
 
+# Dev helpers/pages are excluded from stable packaging by default.
+if [[ "${INCLUDE_DEV_TOOLS_PAGE:-0}" == "1" ]] && [[ -f "${ROOT_DIR}/DriveMapDevTools.page" ]]; then
+  cp -a "${ROOT_DIR}/DriveMapDevTools.page" "${TARGET_DIR}/"
+  if [[ -f "${ROOT_DIR}/DriveMapDevToolsSimulator.page" ]]; then
+    cp -a "${ROOT_DIR}/DriveMapDevToolsSimulator.page" "${TARGET_DIR}/"
+  fi
+fi
+
 # Build and release helpers are not needed on the Unraid runtime.
 rm -f \
   "${TARGET_DIR}/scripts/build-assets-txz" \

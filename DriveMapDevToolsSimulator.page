@@ -1,0 +1,589 @@
+Menu="DriveMapDevTools"
+Title="Simulator"
+Icon="icon-simulator"
+Tag="wrench"
+---
+<?PHP
+$plugin = '45d-drivemap';
+$plugin_dir = "/usr/local/emhttp/plugins/$plugin";
+$map_script = "$plugin_dir/scripts/45d-generate-map";
+$alias_file = '/etc/vdev_id.conf';
+$server_info_file = '/var/local/45d/server_info.json';
+$map_file = '/var/local/45d/drivemap.json';
+$backup_dir = '/var/local/45d/dev-sim-backup';
+$backup_alias = "$backup_dir/vdev_id.conf.bak";
+$backup_server_info = "$backup_dir/server_info.json.bak";
+$state_file = "$backup_dir/state.json";
+
+$profiles = [
+  'storinator_s45' => [
+    'label' => 'Storinator S45',
+    'model' => 'Storinator-S45',
+    'alias_style' => 'STORINATOR',
+    'chassis' => 'S45',
+    'rows' => [15, 15, 15],
+  ],
+  'h16_q30' => [
+    'label' => 'H16 Q30',
+    'model' => 'Storinator-H16-Q30',
+    'alias_style' => 'H16',
+    'chassis' => 'Q30',
+    'rows' => [15, 23],
+  ],
+  'storinator_c8' => [
+    'label' => 'Storinator C8',
+    'model' => 'Storinator-C8',
+    'alias_style' => 'STORINATOR',
+    'chassis' => 'C8',
+    'rows' => [4, 4],
+  ],
+  'f8_x1' => [
+    'label' => 'F8 X1',
+    'model' => 'F8X1',
+    'alias_style' => 'F8',
+    'chassis' => 'F8X1',
+    'rows' => [20],
+  ],
+];
+
+$occupancy_modes = [
+  'real_only' => 'Use detected by-path devices only',
+  'repeat_detected' => 'Repeat detected by-path devices to fill more bays',
+];
+
+$disk_modes = [
+  'passthrough' => 'Use generator output only (real data)',
+  'healthy' => 'Overlay healthy synthetic disk metadata',
+  'mixed' => 'Overlay mixed-health synthetic disk metadata',
+  'failing' => 'Overlay degraded/failing synthetic disk metadata',
+];
+
+function discover_by_path_devices()
+{
+  $devices = [];
+  foreach (glob('/dev/disk/by-path/*') ?: [] as $path) {
+    if (preg_match('/-part[0-9]+$/', $path)) {
+      continue;
+    }
+    if (!is_link($path)) {
+      continue;
+    }
+    $devices[] = $path;
+  }
+  natcasesort($devices);
+  return array_values($devices);
+}
+
+function bay_ids_from_rows($rows)
+{
+  $ids = [];
+  foreach ($rows as $row_idx => $count) {
+    for ($drive = 1; $drive <= (int)$count; $drive++) {
+      $ids[] = ($row_idx + 1) . '-' . $drive;
+    }
+  }
+  return $ids;
+}
+
+function write_alias_map($path, $aliases)
+{
+  $lines = [
+    '# 45D Drive Map Dev simulation file',
+    '# Generated at ' . gmdate('c'),
+  ];
+  foreach ($aliases as $alias) {
+    $lines[] = 'alias ' . $alias['bay'] . ' ' . $alias['path'];
+  }
+  $payload = implode("\n", $lines) . "\n";
+  return @file_put_contents($path, $payload) !== false;
+}
+
+function write_server_info($path, $model, $alias_style, $chassis, $serial)
+{
+  $data = [
+    'Model' => $model,
+    'Chassis Size' => strtoupper($chassis),
+    'Alias Style' => strtoupper($alias_style),
+    'Serial' => $serial,
+    'HBA' => [],
+  ];
+  $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+  return @file_put_contents($path, $json) !== false;
+}
+
+function run_map_generator($script)
+{
+  if (!is_file($script) || !is_executable($script)) {
+    return [1, ['Map generator script not found or not executable: ' . $script]];
+  }
+  $output = [];
+  $code = 0;
+  exec(escapeshellarg($script) . ' 2>&1', $output, $code);
+  return [$code, $output];
+}
+
+function synthetic_disk_slot_data($slot_index, $mode)
+{
+  $is_ssd = ($slot_index % 5) === 0;
+  $temp = $is_ssd ? 30 : 34;
+  $temp += ($slot_index % 6);
+  $health = 'OK';
+  $pending = '0';
+  $offline = '0';
+
+  if ($mode === 'mixed') {
+    if (($slot_index % 10) === 0) {
+      $health = 'POOR';
+      $pending = '8';
+      $offline = '3';
+      $temp += 11;
+    } elseif (($slot_index % 4) === 0) {
+      $health = 'WARN';
+      $pending = '1';
+      $temp += 5;
+    }
+  } elseif ($mode === 'failing') {
+    if (($slot_index % 2) === 0) {
+      $health = 'POOR';
+      $pending = (string)(5 + ($slot_index % 6));
+      $offline = (string)(2 + ($slot_index % 4));
+      $temp += 14;
+    } else {
+      $health = 'WARN';
+      $pending = '2';
+      $temp += 8;
+    }
+  }
+
+  $capacity = $is_ssd
+    ? '3.49 TiB'
+    : (($slot_index % 3) === 0 ? '10.91 TiB' : '14.55 TiB');
+
+  return [
+    'model-family' => $is_ssd ? 'Samsung Enterprise SSD' : 'Seagate Exos',
+    'model-name' => $is_ssd ? 'PM9A3 3.84TB' : 'X18 16TB',
+    'serial' => sprintf('SIM-%s-%04d', strtoupper(substr($mode, 0, 1)), $slot_index),
+    'capacity' => $capacity,
+    'firm-ver' => 'SIM-' . (string)(100 + ($slot_index % 90)),
+    'rotation-rate' => $is_ssd ? 'Solid State Device' : '7200 rpm',
+    'start-stop-count' => $is_ssd ? '0' : (string)(15 + $slot_index),
+    'power-cycle-count' => (string)(2 + ($slot_index % 20)),
+    'temp-c' => (string)$temp . ' C',
+    'current-pending-sector' => $pending,
+    'offline-uncorrectable' => $offline,
+    'power-on-time' => (string)(4200 + ($slot_index * 37)),
+    'health' => $health,
+    'disk_type' => $is_ssd ? 'SSD' : 'HDD',
+  ];
+}
+
+function overlay_map_with_synthetic_disks($map_file, $mode, $occupied_count)
+{
+  if ($mode === 'passthrough') {
+    return [true, ''];
+  }
+  if (!is_file($map_file)) {
+    return [false, 'Missing map file: ' . $map_file];
+  }
+  $raw = @file_get_contents($map_file);
+  if ($raw === false) {
+    return [false, 'Unable to read map file: ' . $map_file];
+  }
+  $decoded = json_decode($raw, true);
+  if (!is_array($decoded) || !isset($decoded['rows']) || !is_array($decoded['rows'])) {
+    return [false, 'Map JSON format is invalid for synthetic overlay'];
+  }
+
+  $slot_idx = 0;
+  foreach ($decoded['rows'] as $row_index => $row) {
+    if (!is_array($row)) {
+      continue;
+    }
+    foreach ($row as $col_index => $slot) {
+      if (!is_array($slot)) {
+        continue;
+      }
+      $slot_idx++;
+      if ($slot_idx > $occupied_count) {
+        continue;
+      }
+      $overlay = synthetic_disk_slot_data($slot_idx, $mode);
+      foreach ($overlay as $field => $value) {
+        $slot[$field] = $value;
+      }
+      $slot['occupied'] = true;
+      if (($slot['dev'] ?? '') === '') {
+        $slot['dev'] = '/dev/sim' . str_pad((string)$slot_idx, 3, '0', STR_PAD_LEFT);
+      }
+      $decoded['rows'][$row_index][$col_index] = $slot;
+    }
+  }
+
+  $encoded = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+  if ($encoded === false) {
+    return [false, 'Failed encoding synthetic overlay map JSON'];
+  }
+  if (@file_put_contents($map_file, $encoded) === false) {
+    return [false, 'Failed writing synthetic overlay map JSON'];
+  }
+  return [true, ''];
+}
+
+function ensure_dir($path)
+{
+  if (!is_dir($path)) {
+    @mkdir($path, 0755, true);
+  }
+}
+
+function backup_once($src, $dest)
+{
+  if (!file_exists($src)) {
+    return;
+  }
+  if (file_exists($dest)) {
+    return;
+  }
+  @copy($src, $dest);
+}
+
+function restore_or_delete($backup, $target)
+{
+  if (file_exists($backup)) {
+    @copy($backup, $target);
+    @unlink($backup);
+    return 'restored';
+  }
+  if (file_exists($target)) {
+    @unlink($target);
+  }
+  return 'deleted';
+}
+
+function load_json_file($path)
+{
+  if (!is_file($path)) {
+    return null;
+  }
+  $raw = @file_get_contents($path);
+  if ($raw === false) {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  return is_array($decoded) ? $decoded : null;
+}
+
+$messages = [];
+$errors = [];
+$command_output = [];
+
+$selected_profile = $_POST['profile'] ?? 'storinator_s45';
+$selected_occupancy_mode = $_POST['occupancy_mode'] ?? 'real_only';
+$selected_disk_mode = $_POST['disk_mode'] ?? 'passthrough';
+$custom_model = $_POST['model'] ?? '';
+$custom_alias_style = $_POST['alias_style'] ?? '';
+$custom_chassis = $_POST['chassis'] ?? '';
+$custom_serial = $_POST['serial'] ?? '';
+$occupied_count_raw = $_POST['occupied_count'] ?? '';
+
+if (!isset($occupancy_modes[$selected_occupancy_mode])) {
+  $selected_occupancy_mode = 'real_only';
+}
+if (!isset($disk_modes[$selected_disk_mode])) {
+  $selected_disk_mode = 'passthrough';
+}
+
+$devices = discover_by_path_devices();
+$device_count = count($devices);
+$active_state = load_json_file($state_file);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  $action = $_POST['action'] ?? '';
+
+  if ($action === 'apply') {
+    if (!isset($profiles[$selected_profile])) {
+      $errors[] = 'Unknown simulation profile: ' . htmlspecialchars($selected_profile);
+    } else {
+      $profile = $profiles[$selected_profile];
+      $rows = $profile['rows'];
+      $total_slots = array_sum($rows);
+      $bay_ids = bay_ids_from_rows($rows);
+      $max_occupied = $selected_occupancy_mode === 'repeat_detected'
+        ? $total_slots
+        : min($device_count, $total_slots);
+      $occupied_count = (int)$occupied_count_raw;
+      if ($occupied_count <= 0) {
+        $occupied_count = $max_occupied;
+      }
+      if ($occupied_count > $max_occupied) {
+        $occupied_count = $max_occupied;
+      }
+      if ($occupied_count > 0 && $device_count === 0) {
+        $errors[] = 'No by-path devices detected; cannot mark bays occupied.';
+      }
+
+      $model = trim($custom_model) !== '' ? trim($custom_model) : $profile['model'];
+      $alias_style = trim($custom_alias_style) !== '' ? trim($custom_alias_style) : $profile['alias_style'];
+      $chassis = trim($custom_chassis) !== '' ? trim($custom_chassis) : $profile['chassis'];
+      $serial = trim($custom_serial) !== '' ? trim($custom_serial) : 'SIM-' . strtoupper(substr(md5((string)microtime(true)), 0, 8));
+
+      $aliases = [];
+      foreach ($bay_ids as $idx => $bay) {
+        if ($idx < $occupied_count && $device_count > 0) {
+          if ($selected_occupancy_mode === 'repeat_detected') {
+            $path = $devices[$idx % $device_count];
+          } else {
+            $path = $devices[$idx];
+          }
+        } else {
+          $path = '/dev/disk/by-path/sim-' . str_replace('-', '_', $bay);
+        }
+        $aliases[] = ['bay' => $bay, 'path' => $path];
+      }
+
+      ensure_dir($backup_dir);
+      backup_once($alias_file, $backup_alias);
+      backup_once($server_info_file, $backup_server_info);
+
+      if (!write_alias_map($alias_file, $aliases)) {
+        $errors[] = 'Failed writing ' . $alias_file;
+      }
+      if (!write_server_info($server_info_file, $model, $alias_style, $chassis, $serial)) {
+        $errors[] = 'Failed writing ' . $server_info_file;
+      }
+
+      if (!$errors) {
+        @file_put_contents($state_file, json_encode([
+          'appliedAt' => gmdate('c'),
+          'profile' => $selected_profile,
+          'slots' => $total_slots,
+          'occupied' => $occupied_count,
+          'occupancyMode' => $selected_occupancy_mode,
+          'diskMode' => $selected_disk_mode,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+
+        [$code, $command_output] = run_map_generator($map_script);
+        if ($code !== 0) {
+          $errors[] = 'Map regeneration failed (exit ' . $code . ').';
+        } else {
+          if ($selected_disk_mode !== 'passthrough') {
+            [$overlay_ok, $overlay_err] = overlay_map_with_synthetic_disks($map_file, $selected_disk_mode, $occupied_count);
+            if (!$overlay_ok) {
+              $errors[] = 'Synthetic disk overlay failed: ' . $overlay_err;
+            }
+          }
+        }
+        if (!$errors) {
+          $messages[] = 'Simulation applied: ' . $profile['label']
+            . ' (' . $occupied_count . '/' . $total_slots . ' occupied bays, '
+            . str_replace('_', '-', $selected_occupancy_mode) . ', '
+            . $selected_disk_mode . ' disk mode).';
+        }
+      }
+    }
+  } elseif ($action === 'clear') {
+    ensure_dir($backup_dir);
+    $alias_state = restore_or_delete($backup_alias, $alias_file);
+    $server_state = restore_or_delete($backup_server_info, $server_info_file);
+    @unlink($state_file);
+
+    if (is_file($alias_file)) {
+      [$code, $command_output] = run_map_generator($map_script);
+      if ($code !== 0) {
+        $errors[] = 'Map regeneration failed while clearing simulation.';
+      }
+    } else {
+      @unlink($map_file);
+    }
+
+    if (!$errors) {
+      $messages[] = 'Simulation cleared (alias: ' . $alias_state . ', server_info: ' . $server_state . ').';
+    }
+  } elseif ($action === 'refresh') {
+    [$code, $command_output] = run_map_generator($map_script);
+    if ($code !== 0) {
+      $errors[] = 'Map regeneration failed (exit ' . $code . ').';
+    } else {
+      $active_disk_mode = is_array($active_state) ? (string)($active_state['diskMode'] ?? 'passthrough') : 'passthrough';
+      $active_occupied = is_array($active_state) ? (int)($active_state['occupied'] ?? 0) : 0;
+      if ($active_disk_mode !== 'passthrough') {
+        [$overlay_ok, $overlay_err] = overlay_map_with_synthetic_disks($map_file, $active_disk_mode, $active_occupied);
+        if (!$overlay_ok) {
+          $errors[] = 'Synthetic disk overlay failed during refresh: ' . $overlay_err;
+        }
+      }
+    }
+    if (!$errors) {
+      $messages[] = 'Map regenerated successfully.';
+    }
+  } else {
+    $errors[] = 'Unknown action.';
+  }
+
+  $devices = discover_by_path_devices();
+  $device_count = count($devices);
+}
+
+$active_server_info = load_json_file($server_info_file);
+$active_state = load_json_file($state_file);
+$map_mtime = is_file($map_file) ? gmdate('c', filemtime($map_file)) : '';
+?>
+
+<style>
+.dm-dev-wrap { max-width: 1080px; margin: 0 auto; }
+.dm-dev-warning { padding: 10px 12px; border: 1px solid #d4aa00; background: #fff7dd; margin-bottom: 12px; }
+.dm-dev-card { padding: 12px; border: 1px solid #d9d9d9; margin-bottom: 12px; background: #fff; }
+.dm-dev-grid { display: grid; grid-template-columns: 220px 1fr; gap: 10px; align-items: center; }
+.dm-dev-grid input, .dm-dev-grid select { width: 100%; }
+.dm-dev-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.dm-dev-ok { color: #0d7a22; }
+.dm-dev-err { color: #a30c0c; }
+.dm-dev-code { white-space: pre-wrap; background: #f5f5f5; border: 1px solid #ddd; padding: 10px; margin-top: 10px; max-height: 260px; overflow: auto; }
+.dm-dev-table { width: 100%; border-collapse: collapse; }
+.dm-dev-table td, .dm-dev-table th { border: 1px solid #ddd; padding: 6px; text-align: left; }
+</style>
+
+<div class="dm-dev-wrap">
+  <div class="dm-dev-warning">
+    <strong>Dev-only page:</strong> this is for simulation/testing on non-45d hosts and should not be shipped in stable builds.
+  </div>
+
+  <div class="dm-dev-card">
+    <h3 style="margin-top:0;">Current State</h3>
+    <table class="dm-dev-table">
+      <tr><th>Path</th><th>Status</th></tr>
+      <tr><td><code>/etc/vdev_id.conf</code></td><td><?=is_file($alias_file) ? 'present' : 'missing'?></td></tr>
+      <tr><td><code>/var/local/45d/server_info.json</code></td><td><?=is_file($server_info_file) ? 'present' : 'missing'?></td></tr>
+      <tr><td><code>/var/local/45d/drivemap.json</code></td><td><?=is_file($map_file) ? ('present, updated ' . htmlspecialchars($map_mtime)) : 'missing'?></td></tr>
+      <tr><td><code>/dev/disk/by-path/*</code> usable</td><td><?=htmlspecialchars((string)$device_count)?></td></tr>
+    </table>
+    <?if (is_array($active_state)):?>
+      <p>Active simulation state: <code><?=htmlspecialchars(json_encode($active_state))?></code></p>
+      <p>Active modes:
+        occupancy <code><?=htmlspecialchars((string)($active_state['occupancyMode'] ?? 'real_only'))?></code>,
+        disk data <code><?=htmlspecialchars((string)($active_state['diskMode'] ?? 'passthrough'))?></code>.
+      </p>
+    <?endif;?>
+    <?if (is_array($active_server_info)):?>
+      <p>Current server_info: model <code><?=htmlspecialchars((string)($active_server_info['Model'] ?? '?'))?></code>,
+      style <code><?=htmlspecialchars((string)($active_server_info['Alias Style'] ?? '?'))?></code>,
+      chassis <code><?=htmlspecialchars((string)($active_server_info['Chassis Size'] ?? '?'))?></code>.</p>
+    <?endif;?>
+  </div>
+
+  <div class="dm-dev-card">
+    <h3 style="margin-top:0;">Apply Simulation Profile</h3>
+    <form method="POST">
+      <input type="hidden" name="action" value="apply">
+      <input type="hidden" name="csrf_token" value="<?=$var['csrf_token']?>">
+      <div class="dm-dev-grid">
+        <label for="profile">Profile</label>
+        <select id="profile" name="profile">
+          <?foreach ($profiles as $key => $profile):?>
+            <option value="<?=htmlspecialchars($key)?>" <?=$selected_profile === $key ? 'selected' : ''?>>
+              <?=htmlspecialchars($profile['label'])?> (<?=htmlspecialchars(implode('+', $profile['rows']))?>)
+            </option>
+          <?endforeach;?>
+        </select>
+
+        <label for="occupied_count">Occupied bays</label>
+        <input id="occupied_count" name="occupied_count" type="number" min="0" value="<?=htmlspecialchars((string)$occupied_count_raw)?>" placeholder="<?=htmlspecialchars((string)$device_count)?>">
+
+        <label for="occupancy_mode">Occupied bay source</label>
+        <select id="occupancy_mode" name="occupancy_mode">
+          <?foreach ($occupancy_modes as $mode_key => $mode_label):?>
+            <option value="<?=htmlspecialchars($mode_key)?>" <?=$selected_occupancy_mode === $mode_key ? 'selected' : ''?>>
+              <?=htmlspecialchars($mode_label)?>
+            </option>
+          <?endforeach;?>
+        </select>
+
+        <label for="disk_mode">Disk data mode</label>
+        <select id="disk_mode" name="disk_mode">
+          <?foreach ($disk_modes as $mode_key => $mode_label):?>
+            <option value="<?=htmlspecialchars($mode_key)?>" <?=$selected_disk_mode === $mode_key ? 'selected' : ''?>>
+              <?=htmlspecialchars($mode_label)?>
+            </option>
+          <?endforeach;?>
+        </select>
+
+        <label for="model">Model override</label>
+        <input id="model" name="model" type="text" value="<?=htmlspecialchars($custom_model)?>" placeholder="profile default">
+
+        <label for="alias_style">Alias Style override</label>
+        <input id="alias_style" name="alias_style" type="text" value="<?=htmlspecialchars($custom_alias_style)?>" placeholder="profile default">
+
+        <label for="chassis">Chassis override</label>
+        <input id="chassis" name="chassis" type="text" value="<?=htmlspecialchars($custom_chassis)?>" placeholder="profile default">
+
+        <label for="serial">Serial override</label>
+        <input id="serial" name="serial" type="text" value="<?=htmlspecialchars($custom_serial)?>" placeholder="auto SIM-xxxx">
+      </div>
+      <div class="dm-dev-actions">
+        <input type="submit" value="Apply Simulation">
+      </div>
+      <p style="margin-top:8px;">
+        <strong>Tip:</strong> choose <code>repeat_detected</code> + <code>mixed</code> (or <code>failing</code>)
+        to simulate full chassis populations with varied SMART-like values on non-45d hosts.
+      </p>
+    </form>
+  </div>
+
+  <div class="dm-dev-card">
+    <h3 style="margin-top:0;">Maintenance</h3>
+    <form method="POST" style="display:inline-block; margin-right:8px;">
+      <input type="hidden" name="action" value="refresh">
+      <input type="hidden" name="csrf_token" value="<?=$var['csrf_token']?>">
+      <input type="submit" value="Refresh Map Only">
+    </form>
+    <form method="POST" style="display:inline-block;" onsubmit="return confirm('Clear simulation and restore backups (if present)?');">
+      <input type="hidden" name="action" value="clear">
+      <input type="hidden" name="csrf_token" value="<?=$var['csrf_token']?>">
+      <input type="submit" value="Clear Simulation">
+    </form>
+    <p style="margin-top:8px;">
+      After applying/clearing, reload <a href="/Main">Main</a> to inspect Drive Map.
+    </p>
+  </div>
+
+  <?if ($messages):?>
+    <div class="dm-dev-card dm-dev-ok">
+      <?foreach ($messages as $msg):?>
+        <div><?=htmlspecialchars($msg)?></div>
+      <?endforeach;?>
+    </div>
+  <?endif;?>
+
+  <?if ($errors):?>
+    <div class="dm-dev-card dm-dev-err">
+      <?foreach ($errors as $msg):?>
+        <div><?=htmlspecialchars($msg)?></div>
+      <?endforeach;?>
+    </div>
+  <?endif;?>
+
+  <?if ($command_output):?>
+    <div class="dm-dev-card">
+      <h3 style="margin-top:0;">Generator Output</h3>
+      <div class="dm-dev-code"><?=htmlspecialchars(implode("\n", $command_output))?></div>
+    </div>
+  <?endif;?>
+
+  <div class="dm-dev-card">
+    <h3 style="margin-top:0;">Detected /dev/disk/by-path targets</h3>
+    <?if ($devices):?>
+      <table class="dm-dev-table">
+        <tr><th>#</th><th>Path</th><th>Target</th></tr>
+        <?foreach ($devices as $idx => $dev):?>
+          <tr>
+            <td><?=htmlspecialchars((string)($idx + 1))?></td>
+            <td><code><?=htmlspecialchars($dev)?></code></td>
+            <td><code><?=htmlspecialchars((string)realpath($dev))?></code></td>
+          </tr>
+        <?endforeach;?>
+      </table>
+    <?else:?>
+      <p>No by-path symlinks detected.</p>
+    <?endif;?>
+  </div>
+</div>
