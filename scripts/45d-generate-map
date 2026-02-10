@@ -1,5 +1,7 @@
 #!/usr/bin/php
 <?php
+// Builds /var/local/45d/drivemap.json from alias mappings and live disk data.
+// This is the runtime source of truth for api.php?action=drivemap|lsdev|disk_info.
 $start_time = microtime(true);
 
 $output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
@@ -45,6 +47,8 @@ function script_command($script)
 }
 
 if (is_file($server_info_generator)) {
+  // Keep server_info.json fresh so row-template selection can use real chassis
+  // metadata when available.
   $server_command = script_command($server_info_generator);
   $server_output = [];
   $server_code = 0;
@@ -208,6 +212,7 @@ function load_server_info($output_dir)
 
 function row_templates()
 {
+  // Mirrors upstream alias/chassis row layouts to preserve visual parity.
   return [
     'H16' => [
       'AV15' => [23],
@@ -370,6 +375,7 @@ function decode_json_loose($text)
 
 function smart_data($dev_path, $smartctl_dir)
 {
+  // Prefer fixture JSON when provided (tests), otherwise invoke smartctl.
   if ($dev_path === '') {
     return null;
   }
@@ -465,6 +471,7 @@ function apply_smart_data(&$slot, $smart)
 
 function parse_aliases($alias_file)
 {
+  // Parse and sort aliases numerically by controller/bay.
   if (!is_file($alias_file)) {
     return [];
   }
@@ -631,6 +638,7 @@ $duration = microtime(true) - $start_time;
 $timestamp = gmdate('c');
 
 $payload = [
+  // "rows" powers both the embedded UI and the fallback renderer.
   'rows' => $rows,
   'meta' => $meta,
   'lsdevDuration' => round($duration, 2),

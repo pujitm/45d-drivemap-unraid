@@ -1,4 +1,6 @@
 <?php
+// ZFS collector used by api.php?action=zfs_info.
+// Supports fixture overrides so tests can run on hosts without ZFS binaries.
 function zfs_fixture_dir()
 {
   $dir = getenv('DRIVEMAP_ZFS_FIXTURE_DIR');
@@ -25,6 +27,7 @@ function read_fixture($name)
 
 function command_output($command, $fixture_name = '')
 {
+  // Fixtures take precedence over command execution when provided.
   if ($fixture_name !== '') {
     $fixture = read_fixture($fixture_name);
     if ($fixture !== null) {
@@ -77,6 +80,8 @@ function get_zfs_list()
 
 function get_zpool_list()
 {
+  // zpool list supplies pool-level raw fields; merge in selected zfs list
+  // values so the frontend receives both views in one payload.
   $output = command_output('zpool list -H', 'zpool_list.txt');
   if ($output === '') {
     return [];
@@ -186,6 +191,8 @@ function zpool_iostat($pool_name)
 
 function zpool_status_parse($status_obj, $key, $pool_name)
 {
+  // Parse default and -P (absolute path) variants to keep display names while
+  // still validating alias-backed path conformity.
   if (!isset($status_obj[$key])) {
     return [[], [], []];
   }
@@ -274,6 +281,8 @@ function zpool_status_parse($status_obj, $key, $pool_name)
 
 function verify_zfs_device_format($status_obj, $pool_name)
 {
+  // Frontend drive-to-bay mapping relies on "card-drive" aliases (e.g. 1-1).
+  // Emit warnings when pool members do not follow that convention.
   $alert = [];
   if (!isset($status_obj[$pool_name])) {
     return $alert;
@@ -412,6 +421,7 @@ function zpool_iostat_parse($iostat_obj, $key, $pool_name)
 
 function generate_zfs_info()
 {
+  // Keep response shape stable regardless of ZFS availability.
   $json_zfs = [
     'zfs_installed' => false,
   ];

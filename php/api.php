@@ -1,4 +1,7 @@
 <?php
+// API entrypoint used by both the embedded 45Drives UI shim and the fallback
+// in-plugin renderer. This file orchestrates data generation and serves
+// normalized JSON payloads from /var/local/45d.
 $plugin = '45d-drivemap';
 $base_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
 $map_file = getenv('DRIVEMAP_OUTPUT_FILE') ?: ($base_dir . '/drivemap.json');
@@ -65,6 +68,8 @@ function ensure_last_updated($data, $path)
 
 function normalize_disk_info_rows($rows)
 {
+  // disk_info callers may expect a flat slot list, while drivemap/lsdev uses
+  // row-grouped slots. Accept either and always return flat rows here.
   if (!is_array($rows)) {
     return [];
   }
@@ -102,6 +107,8 @@ function load_server_info($paths)
 
 function script_command($script)
 {
+  // Some runtimes execute this API under php-fpm/apache SAPI; if the target is
+  // a PHP script we force invocation through a CLI PHP binary.
   if (!is_file($script)) {
     return null;
   }
@@ -160,6 +167,7 @@ function run_server_info_generator($generator, $log_file)
 $action = $_REQUEST['action'] ?? 'drivemap';
 
 if ($action === 'drivemap' || $action === 'lsdev') {
+  // Lazily generate map data on first request (or after cache deletion).
   $data = load_json($map_file);
   if ($data === null) {
     $result = run_generator($generator, $log_file);
@@ -175,6 +183,7 @@ if ($action === 'drivemap' || $action === 'lsdev') {
 }
 
 if ($action === 'disk_info') {
+  // Legacy "disk_info" consumers expect a flattened list of bays.
   $data = load_json($map_file);
   if ($data === null) {
     $result = run_generator($generator, $log_file);
@@ -196,6 +205,7 @@ if ($action === 'zfs_info') {
 }
 
 if ($action === 'server_info') {
+  // Prefer existing vendor server_info first; generate only as fallback.
   $data = load_server_info($server_info_paths);
   if ($data === null) {
     $result = run_server_info_generator($server_info_generator, $log_file);
@@ -227,6 +237,7 @@ if ($action === 'status') {
 }
 
 if ($action === 'refresh') {
+  // Force regeneration without waiting for cache miss.
   $result = run_generator($generator, $log_file);
   respond_json($result, $result['ok'] ? 200 : 500);
 }

@@ -1,5 +1,7 @@
 #!/usr/bin/php
 <?php
+// Ensures /var/local/45d/server_info.json exists on Unraid.
+// Priority: vendor-provided file -> vendor server_identifier -> local inference.
 $output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
 $output_file = getenv('DRIVEMAP_SERVER_INFO_OUTPUT') ?: ($output_dir . '/server_info.json');
 $source_file = getenv('DRIVEMAP_SERVER_INFO_INPUT') ?: '/etc/45drives/server_info/server_info.json';
@@ -34,6 +36,7 @@ function read_first_value($paths)
 
 function alias_templates()
 {
+  // Layout templates used to infer alias style/chassis from alias counts.
   return [
     'H16' => [
       'AV15' => [23],
@@ -126,6 +129,7 @@ function prefix_hint($prefix)
 
 function infer_layout_from_aliases($alias_file, $prefix)
 {
+  // First try exact row-shape matching, then fall back to total-drive heuristics.
   $summary = alias_summary($alias_file);
   $rows = $summary['rows'];
   $total = $summary['total'];
@@ -210,6 +214,7 @@ function model_from_parts($prefix, $style, $chassis)
 }
 
 if (is_file($source_file)) {
+  // Prefer exact vendor output when present.
   @copy($source_file, $output_file);
   log_line($log_file, 'server_info copied from ' . $source_file);
   exit(0);
@@ -218,6 +223,7 @@ if (is_file($source_file)) {
 $vendor_output = [];
 $vendor_code = 0;
 if (is_executable($vendor_server_identifier)) {
+  // If vendor tool can generate the source file, consume it directly.
   exec(escapeshellarg($vendor_server_identifier) . ' 2>&1', $vendor_output, $vendor_code);
   if ($vendor_code === 0 && is_file($source_file)) {
     @copy($source_file, $output_file);
@@ -248,6 +254,7 @@ $chassis = strtoupper($chassis);
 $model = $force_model !== '' ? $force_model : model_from_parts($prefix, $alias_style, $chassis);
 
 $server_info = [
+  // Keep output compatible with the embedded 45Drives frontend contract.
   'Model' => $model !== '' ? $model : '?',
   'Chassis Size' => $chassis !== '' ? $chassis : '?',
   'Alias Style' => $alias_style !== '' ? $alias_style : '?',
