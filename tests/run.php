@@ -115,6 +115,25 @@ function alias_map_from_fixture($path)
   return $map;
 }
 
+function alias_lines_from_fixture($path)
+{
+  $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  if (!is_array($lines)) {
+    return [];
+  }
+  $result = [];
+  foreach ($lines as $line) {
+    $line = trim((string)$line);
+    if ($line === '' || strpos($line, '#') === 0) {
+      continue;
+    }
+    if (strpos($line, 'alias ') === 0) {
+      $result[] = $line;
+    }
+  }
+  return $result;
+}
+
 function set_common_env($ctx, $fixtures)
 {
   putenv('DRIVEMAP_OUTPUT_DIR=' . $ctx['out_dir']);
@@ -190,6 +209,187 @@ function vendor_template_lengths($root, $style, $chassis)
     return null;
   }
   return array_values(array_map('intval', $decoded));
+}
+
+function vendor_dmap_alias_lines($root, $case_name)
+{
+  $script = $root . '/tests/vendor_dmap_case.py';
+  $vendor_dmap = $root . '/vendor/45drives/tools/tools/dmap';
+  $cmd = 'python3 '
+    . escapeshellarg($script) . ' '
+    . escapeshellarg($vendor_dmap) . ' '
+    . escapeshellarg($case_name);
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    return null;
+  }
+  $decoded = json_decode(implode("\n", $output), true);
+  if (!is_array($decoded)) {
+    return null;
+  }
+  return array_values(array_map('strval', $decoded));
+}
+
+function vendor_dmap_cases($root)
+{
+  $script = $root . '/tests/vendor_dmap_case.py';
+  $cmd = 'python3 ' . escapeshellarg($script) . ' --list';
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    return null;
+  }
+  $decoded = json_decode(implode("\n", $output), true);
+  if (!is_array($decoded)) {
+    return null;
+  }
+  return array_values(array_map('strval', $decoded));
+}
+
+function vendor_dmap_case_server($root, $case_name)
+{
+  $script = $root . '/tests/vendor_dmap_case.py';
+  $vendor_dmap = $root . '/vendor/45drives/tools/tools/dmap';
+  $cmd = 'python3 '
+    . escapeshellarg($script) . ' '
+    . escapeshellarg($vendor_dmap) . ' '
+    . escapeshellarg($case_name) . ' --server';
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    return null;
+  }
+  $decoded = json_decode(implode("\n", $output), true);
+  return is_array($decoded) ? $decoded : null;
+}
+
+function vendor_dmap_case_local_env($root, $case_name)
+{
+  $script = $root . '/tests/vendor_dmap_case.py';
+  $vendor_dmap = $root . '/vendor/45drives/tools/tools/dmap';
+  $cmd = 'python3 '
+    . escapeshellarg($script) . ' '
+    . escapeshellarg($vendor_dmap) . ' '
+    . escapeshellarg($case_name) . ' --local-env';
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    return [];
+  }
+  $decoded = json_decode(implode("\n", $output), true);
+  return is_array($decoded) ? $decoded : [];
+}
+
+function vendor_dmap_case_full_text($root, $case_name)
+{
+  $script = $root . '/tests/vendor_dmap_case.py';
+  $vendor_dmap = $root . '/vendor/45drives/tools/tools/dmap';
+  $cmd = 'python3 '
+    . escapeshellarg($script) . ' '
+    . escapeshellarg($vendor_dmap) . ' '
+    . escapeshellarg($case_name) . ' --full';
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    return null;
+  }
+  $decoded = json_decode(implode("\n", $output), true);
+  if ($decoded === null) {
+    return null;
+  }
+  return is_string($decoded) ? $decoded : null;
+}
+
+function validate_alias_lines($lines, $label)
+{
+  assert_true(is_array($lines), "$label alias lines are an array");
+  if (!is_array($lines) || !$lines) {
+    return;
+  }
+
+  $seen = [];
+  $rows = [];
+  foreach ($lines as $idx => $line) {
+    $ok = preg_match('/^alias\s+(\d+)-(\d+)\s+\/dev\/disk\/by-path\/\S+$/', $line, $m) === 1;
+    assert_true($ok, "$label line format #" . ($idx + 1));
+    if (!$ok) {
+      continue;
+    }
+    $bay = $m[1] . '-' . $m[2];
+    $row = (int)$m[1];
+    $drive = (int)$m[2];
+    assert_true(!isset($seen[$bay]), "$label unique bay-id $bay");
+    $seen[$bay] = true;
+    if (!isset($rows[$row])) {
+      $rows[$row] = [];
+    }
+    $rows[$row][] = $drive;
+  }
+
+  ksort($rows);
+  foreach ($rows as $row => $drives) {
+    sort($drives);
+    $expected = range(1, count($drives));
+    assert_equal($drives, $expected, "$label contiguous drive numbering for row $row");
+  }
+}
+
+function run_ported_dmap($root, $ctx, $server, $env = [])
+{
+  $script = $root . '/scripts/45d-generate-vdev-id';
+  $server_file = $ctx['tmp'] . '/server_info.json';
+  $output_file = $ctx['tmp'] . '/vdev_id.conf';
+  file_put_contents($server_file, json_encode($server, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+
+  $env_pairs = [
+    'DRIVEMAP_DMAP_SERVER_INFO' => $server_file,
+    'DRIVEMAP_DMAP_OUTPUT' => $output_file,
+  ];
+  foreach ($env as $key => $value) {
+    if (!is_string($key) || $key === '') {
+      continue;
+    }
+    $env_pairs[$key] = (string)$value;
+  }
+  $prefix = [];
+  foreach ($env_pairs as $key => $value) {
+    $prefix[] = $key . '=' . escapeshellarg($value);
+  }
+
+  $cmd = implode(' ', $prefix) . ' php ' . escapeshellarg($script) . ' 2>&1';
+  $output = [];
+  $code = 0;
+  exec($cmd, $output, $code);
+
+  $raw = is_file($output_file) ? (string)@file_get_contents($output_file) : '';
+  $lines = is_file($output_file) ? alias_lines_from_fixture($output_file) : null;
+  return [
+    'code' => $code,
+    'stdout' => $output,
+    'output_file' => $output_file,
+    'raw' => $raw,
+    'aliases' => $lines,
+  ];
+}
+
+function run_ported_dmap_alias_lines($root, $ctx, $case_name)
+{
+  $server = vendor_dmap_case_server($root, $case_name);
+  if (!is_array($server)) {
+    return null;
+  }
+  $env = vendor_dmap_case_local_env($root, $case_name);
+  $result = run_ported_dmap($root, $ctx, $server, $env);
+  if (($result['code'] ?? 1) !== 0) {
+    return null;
+  }
+  return is_array($result['aliases'] ?? null) ? $result['aliases'] : null;
 }
 
 register_shutdown_function(function () use (&$cleanup_dirs) {
@@ -383,6 +583,84 @@ assert_true(is_array($inferred_server_info), 'inferred server_info parses as JSO
 assert_equal($inferred_server_info['Alias Style'] ?? '', 'H16', 'inferred alias style from aliases');
 assert_equal($inferred_server_info['Chassis Size'] ?? '', 'Q30', 'inferred chassis size from aliases');
 assert_true(strpos((string)($inferred_server_info['Model'] ?? ''), 'H16-Q30') !== false, 'inferred model includes H16-Q30');
+
+// Scenario 6: fixture parity against vendored upstream dmap output.
+$dmap_cases = [
+  ['name' => 'h16_q30', 'fixture' => $fixtures . '/vdev_id_h16_q30.conf'],
+  ['name' => 'h16_s45', 'fixture' => $fixtures . '/vdev_id_h16_s45.conf'],
+  ['name' => 'storinator_s45', 'fixture' => $fixtures . '/vdev_id_s45_full.conf'],
+  ['name' => 'f8_x1', 'fixture' => $fixtures . '/dmap_f8_x1.conf'],
+  ['name' => 'c8', 'fixture' => $fixtures . '/dmap_c8.conf'],
+];
+foreach ($dmap_cases as $case) {
+  $name = $case['name'];
+  $fixture_lines = alias_lines_from_fixture($case['fixture']);
+  assert_true(count($fixture_lines) > 0, "dmap fixture has alias lines ($name)");
+  validate_alias_lines($fixture_lines, "fixture $name");
+  $vendor_lines = vendor_dmap_alias_lines($root, $name);
+  assert_true(is_array($vendor_lines), "vendor dmap case resolved ($name)");
+  if (is_array($vendor_lines)) {
+    validate_alias_lines($vendor_lines, "vendor $name");
+    assert_equal($fixture_lines, $vendor_lines, "dmap fixture parity ($name)");
+  }
+}
+
+// Scenario 7: ported dmap contract. This should fail until the local
+// dmap-equivalent generator is implemented.
+$ported_dmap_script = $root . '/scripts/45d-generate-vdev-id';
+$ported_dmap_cases = vendor_dmap_cases($root);
+assert_true(is_array($ported_dmap_cases), 'ported dmap case list available');
+if (!is_file($ported_dmap_script)) {
+  assert_true(false, 'ported dmap script exists (scripts/45d-generate-vdev-id)');
+} elseif (is_array($ported_dmap_cases)) {
+  foreach ($ported_dmap_cases as $name) {
+    $vendor_lines = vendor_dmap_alias_lines($root, $name);
+    assert_true(is_array($vendor_lines), "ported vendor case resolved ($name)");
+    $ctx_case = create_context('ported-dmap-' . $name);
+    $server = vendor_dmap_case_server($root, $name);
+    assert_true(is_array($server), "ported case server definition available ($name)");
+    $env = vendor_dmap_case_local_env($root, $name);
+    $ported_result = is_array($server) ? run_ported_dmap($root, $ctx_case, $server, $env) : ['code' => 1, 'aliases' => null, 'raw' => ''];
+    $ported_lines = is_array($ported_result['aliases'] ?? null) && ($ported_result['code'] ?? 1) === 0
+      ? $ported_result['aliases']
+      : null;
+    assert_true(is_array($ported_lines), "ported dmap output generated ($name)");
+    if (is_array($ported_lines)) {
+      validate_alias_lines($ported_lines, "ported $name");
+      assert_true(strpos((string)($ported_result['raw'] ?? ''), 'generated using dmap') !== false, "ported dmap header present ($name)");
+      $vendor_full = vendor_dmap_case_full_text($root, $name);
+      if (is_string($vendor_full)) {
+        $ported_raw = (string)($ported_result['raw'] ?? '');
+        $ported_body = preg_replace('/^# This file was generated using dmap .*?\n/', '', $ported_raw);
+        if (strpos($vendor_full, '# This file was generated using dmap ') === 0) {
+          assert_equal($ported_raw, $vendor_full, "ported dmap full text parity vs vendor ($name)");
+        } else {
+          assert_equal($ported_body, $vendor_full, "ported dmap body parity vs vendor (headerless upstream branch) ($name)");
+        }
+      }
+      if (is_array($vendor_lines)) {
+        assert_equal($ported_lines, $vendor_lines, "ported dmap direct parity vs vendor ($name)");
+      }
+      $ctx_repeat = create_context('ported-dmap-repeat-' . $name);
+      $ported_repeat = run_ported_dmap_alias_lines($root, $ctx_repeat, $name);
+      assert_true(is_array($ported_repeat), "ported dmap repeat output generated ($name)");
+      if (is_array($ported_repeat)) {
+        assert_equal($ported_repeat, $ported_lines, "ported dmap deterministic output ($name)");
+      }
+    }
+  }
+}
+
+// Scenario 8: unsupported alias style should fail.
+$ctx_invalid = create_context('ported-dmap-invalid');
+$invalid_server = vendor_dmap_case_server($root, 'h16_q30');
+if (is_array($invalid_server)) {
+  $invalid_server['Alias Style'] = 'UNSUPPORTED_STYLE';
+  $invalid_result = run_ported_dmap($root, $ctx_invalid, $invalid_server, []);
+  assert_true(($invalid_result['code'] ?? 0) !== 0, 'ported dmap rejects unsupported alias style');
+  $invalid_aliases = $invalid_result['aliases'] ?? null;
+  assert_true($invalid_aliases === null || $invalid_aliases === [], 'ported dmap does not emit aliases on invalid style');
+}
 
 if ($failures > 0) {
   fwrite(STDERR, "\n$failures test(s) failed.\n");

@@ -1,0 +1,656 @@
+#!/usr/bin/php
+<?php
+// Generates /etc/vdev_id.conf from server_info.json with parity-focused mapping
+// logic ported from 45Drives dmap create_vdev_id().
+
+$server_info_path = getenv('DRIVEMAP_DMAP_SERVER_INFO') ?: '/etc/45drives/server_info/server_info.json';
+$output_path = getenv('DRIVEMAP_DMAP_OUTPUT') ?: '/etc/vdev_id.conf';
+$tools_version_path = getenv('DRIVEMAP_TOOLS_VERSION_FILE') ?: '/etc/45drives/server_info/tools_version';
+
+function fail($message)
+{
+  fwrite(STDERR, $message . "\n");
+  exit(1);
+}
+
+function load_json_file($path)
+{
+  if (!is_file($path)) {
+    return null;
+  }
+  $raw = @file_get_contents($path);
+  if ($raw === false) {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  return is_array($decoded) ? $decoded : null;
+}
+
+function tools_version($path)
+{
+  if (!is_file($path)) {
+    return '';
+  }
+  return trim((string)@file_get_contents($path));
+}
+
+function env_json_array($name)
+{
+  $raw = getenv($name);
+  if ($raw === false || $raw === '') {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  if (!is_array($decoded)) {
+    return null;
+  }
+  return $decoded;
+}
+
+function env_json_object($name)
+{
+  $raw = getenv($name);
+  if ($raw === false || $raw === '') {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  if (!is_array($decoded)) {
+    return null;
+  }
+  return $decoded;
+}
+
+function lspci_lines()
+{
+  $mock = env_json_array('DRIVEMAP_DMAP_LSPCI_JSON');
+  if (is_array($mock)) {
+    return array_values(array_map('strval', $mock));
+  }
+  $output = shell_exec('lspci 2>/dev/null');
+  if (!is_string($output) || trim($output) === '') {
+    return [];
+  }
+  return preg_split('/\r?\n/', trim($output));
+}
+
+function sata_addresses()
+{
+  $env = getenv('DRIVEMAP_DMAP_SATA_ADDRS');
+  if (is_string($env) && trim($env) !== '') {
+    $parts = array_map('trim', explode(',', $env));
+    $parts = array_values(array_filter($parts, fn($v) => $v !== ''));
+    if ($parts) {
+      return $parts;
+    }
+  }
+  return [];
+}
+
+function sata_port_paths($addr)
+{
+  $mock = env_json_array('DRIVEMAP_DMAP_SATA_PATHS_JSON');
+  if (is_array($mock) && isset($mock[$addr]) && is_array($mock[$addr])) {
+    return array_values(array_map('strval', $mock[$addr]));
+  }
+  return [];
+}
+
+function detect_first_lspci_bus($pattern)
+{
+  foreach (lspci_lines() as $line) {
+    if (preg_match($pattern, (string)$line, $m)) {
+      return '0000:' . $m[1];
+    }
+  }
+  return null;
+}
+
+function path_for_model($model, $bus, $phy)
+{
+  $scsi_models = ['9600-24i', '9600-16i', '9361-16i', '9361-24i'];
+  if (in_array($model, $scsi_models, true)) {
+    return "/dev/disk/by-path/pci-$bus-scsi-0:0:$phy:0";
+  }
+  return "/dev/disk/by-path/pci-$bus-sas-phy$phy-lun-0";
+}
+
+function hwraid_map_for_bus($bus)
+{
+  $raw = env_json_object('DRIVEMAP_DMAP_HWRAID_JSON');
+  if (!is_array($raw) || !isset($raw[$bus]) || !is_array($raw[$bus])) {
+    return null;
+  }
+  $map = [];
+  foreach ($raw[$bus] as $entry) {
+    $map[] = (string)$entry;
+  }
+  return $map;
+}
+
+function add_alias(&$lines, $row, $drive, $path)
+{
+  $lines[] = "alias $row-$drive $path";
+}
+
+function require_hba($server, $index, $context)
+{
+  $hbas = isset($server['HBA']) && is_array($server['HBA']) ? $server['HBA'] : [];
+  $hba = $hbas[$index] ?? null;
+  if (!is_array($hba)) {
+    fail("Missing HBA object for $context");
+  }
+  $model = (string)($hba['Model'] ?? '');
+  $bus = (string)($hba['Bus Address'] ?? '');
+  if ($model === '' || $bus === '') {
+    fail("Missing HBA Model/Bus Address for $context");
+  }
+  return [$model, $bus];
+}
+
+function generate_hba_aliases($server, $alias_template, $phy_order)
+{
+  $style = (string)($server['Alias Style'] ?? '');
+  $chassis = (string)($server['Chassis Size'] ?? '');
+  $hbas = isset($server['HBA']) && is_array($server['HBA']) ? $server['HBA'] : [];
+
+  if (!isset($alias_template[$style][$chassis])) {
+    fail("Unsupported Alias Style/Chassis Size combination: $style/$chassis");
+  }
+  $counts = $alias_template[$style][$chassis];
+  if (!$hbas) {
+    fail("No HBA entries available for $style/$chassis");
+  }
+
+  $lines = [];
+  foreach ($hbas as $i => $hba) {
+    if (!isset($counts[$i])) {
+      fail("Alias template row missing for HBA index $i");
+    }
+    [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
+    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
+    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
+    if ($is_hwraid && !is_array($hwraid)) {
+      fail("Missing HWRAID map for bus $bus ($model)");
+    }
+    if (!$is_hwraid && !isset($phy_order[$model])) {
+      fail("Unsupported HBA model for aliasing: $model");
+    }
+
+    $count = (int)$counts[$i];
+    if ($style === 'STORINATOR' && $chassis === 'MI4') {
+      $count = 4;
+    }
+
+    $order = $is_hwraid ? $hwraid : $phy_order[$model];
+    for ($j = 0; $j < $count; $j++) {
+      $order_index = $j;
+      if ($style === 'H32' && $i === count($counts) - 2 && $j >= 15) {
+        $order_index = $j + 1;
+      }
+      if (!array_key_exists($order_index, $order)) {
+        fail("Missing phy mapping for model $model at index $order_index");
+      }
+      add_alias($lines, $i + 1, $j + 1, path_for_model($model, $bus, $order[$order_index]));
+    }
+  }
+
+  return $lines;
+}
+
+function generate_c8_aliases($server, $phy_order, $alias_template)
+{
+  $style = (string)($server['Alias Style'] ?? '');
+  $chassis = (string)($server['Chassis Size'] ?? '');
+  if (!isset($alias_template[$style][$chassis][0])) {
+    fail("Unsupported C8 template: $style/$chassis");
+  }
+  [$model, $bus] = require_hba($server, 0, "$style/$chassis");
+  $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
+  $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
+  if ($is_hwraid && !is_array($hwraid)) {
+    fail("Missing HWRAID map for bus $bus ($model)");
+  }
+  if (!$is_hwraid && !isset($phy_order[$model])) {
+    fail("Unsupported HBA model for C8 aliasing: $model");
+  }
+  $order = $is_hwraid ? $hwraid : $phy_order[$model];
+  $count = (int)$alias_template[$style][$chassis][0];
+  $lines = [];
+  for ($j = 0; $j < $count; $j++) {
+    if (!isset($order[$j])) {
+      fail("Missing C8 phy mapping for model $model index $j");
+    }
+    add_alias($lines, 1 + intdiv($j, 4), ($j % 4) + 1, path_for_model($model, $bus, $order[$j]));
+  }
+  return $lines;
+}
+
+function generate_f8_aliases($server, $f8_order, $alias_template)
+{
+  $style = (string)($server['Alias Style'] ?? '');
+  $chassis = (string)($server['Chassis Size'] ?? '');
+  $hbas = isset($server['HBA']) && is_array($server['HBA']) ? $server['HBA'] : [];
+  if (!isset($alias_template[$style][$chassis])) {
+    fail("Unsupported F8 template: $style/$chassis");
+  }
+  $counts = $alias_template[$style][$chassis];
+  $lines = [];
+  foreach ($hbas as $i => $hba) {
+    if (!isset($counts[$i])) {
+      fail("F8 row missing for HBA index $i");
+    }
+    [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
+    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
+    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
+    if ($is_hwraid && !is_array($hwraid)) {
+      fail("Missing HWRAID map for bus $bus ($model)");
+    }
+    if (!$is_hwraid && !isset($f8_order[$model])) {
+      fail("Unsupported HBA model for F8 aliasing: $model");
+    }
+    $order = $is_hwraid ? $hwraid : $f8_order[$model];
+    $count = (int)$counts[$i];
+    for ($j = 0; $j < $count; $j++) {
+      if (!isset($order[$j])) {
+        fail("Missing F8 mapping for model $model index $j");
+      }
+      add_alias($lines, $i + 1, $j + 1, path_for_model($model, $bus, $order[$j]));
+    }
+  }
+  return $lines;
+}
+
+function generate_by_path_aliases($server)
+{
+  $chassis = (string)($server['Chassis Size'] ?? '');
+  $mobo = (string)($server['Motherboard']['Product Name'] ?? '');
+  $lut = [
+    'VM2' => [
+      'ME03-CE0-000' => [
+        ['1-1', 'pci-0000:42:00.0-nvme-1'],
+        ['1-2', 'pci-0000:43:00.0-nvme-1'],
+      ],
+    ],
+  ];
+  if (!isset($lut[$chassis][$mobo])) {
+    fail("Unsupported BYPATH configuration: $chassis/$mobo");
+  }
+  $lines = [];
+  foreach ($lut[$chassis][$mobo] as $entry) {
+    $lines[] = 'alias ' . $entry[0] . ' /dev/disk/by-path/' . $entry[1];
+  }
+  return $lines;
+}
+
+function alias_hl4()
+{
+  $addrs = sata_addresses();
+  if (count($addrs) < 1) {
+    fail('HL4 requires at least one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
+  }
+  $order = [4, 3, 2, 1];
+  $lines = [];
+  foreach ($order as $i => $port) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-{$addrs[0]}-ata-$port");
+  }
+  return $lines;
+}
+
+function alias_hl8()
+{
+  $addrs = sata_addresses();
+  if (count($addrs) < 2) {
+    fail('HL8 requires two SATA addresses (DRIVEMAP_DMAP_SATA_ADDRS)');
+  }
+  $order = [4, 3, 2, 1];
+  $lines = [];
+  foreach ($order as $i => $port) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-{$addrs[0]}-ata-$port");
+  }
+  foreach ($order as $i => $port) {
+    add_alias($lines, 2, $i + 1, "/dev/disk/by-path/pci-{$addrs[1]}-ata-$port");
+  }
+  return $lines;
+}
+
+function alias_pro4()
+{
+  $order = [4, 3, 2, 1];
+  $lines = [];
+  foreach ($order as $i => $port) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-0000:00:17.0-ata-$port");
+  }
+  return $lines;
+}
+
+function alias_pro8()
+{
+  $order1 = [4, 3, 2, 1];
+  $order2 = [8, 7, 6, 5];
+  $lines = [];
+  foreach ($order1 as $i => $port) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-0000:00:17.0-ata-$port");
+  }
+  foreach ($order2 as $i => $port) {
+    add_alias($lines, 2, $i + 1, "/dev/disk/by-path/pci-0000:00:17.0-ata-$port");
+  }
+  return $lines;
+}
+
+function alias_studio8()
+{
+  $order1 = [1, 2, 3, 4];
+  $order2 = [5, 6, 7, 8];
+  $lines = [];
+  foreach ($order1 as $i => $port) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-0000:00:17.0-ata-$port");
+  }
+  foreach ($order2 as $i => $port) {
+    add_alias($lines, 2, $i + 1, "/dev/disk/by-path/pci-0000:00:17.0-ata-$port");
+  }
+  return $lines;
+}
+
+function alias_mi4_ubm($mobo_model)
+{
+  if ($mobo_model === 'ME03-CE0-000') {
+    return [
+      'alias 1-1 /dev/disk/by-path/pci-0000:02:00.0-ata-5',
+      'alias 1-2 /dev/disk/by-path/pci-0000:02:00.0-ata-6',
+      'alias 1-3 /dev/disk/by-path/pci-0000:02:00.0-ata-7',
+      'alias 1-4 /dev/disk/by-path/pci-0000:02:00.0-ata-8',
+    ];
+  }
+  if ($mobo_model === 'MS03-6L0-000') {
+    return [
+      'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1',
+      'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2',
+      'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
+      'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
+    ];
+  }
+  return [];
+}
+
+function alias_mi4($mobo_model, $os_name, $os_version_id)
+{
+  // Upstream calls lspci before motherboard-specific branching.
+  lspci_lines();
+
+  $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
+  if ($mobo_model === 'H11SSL-i' || $mobo_model === 'H11SSL-I') {
+    $bus = '0000:42:00.2';
+    $base = 5;
+  } elseif ($mobo_model === 'H12SSL-i' || $mobo_model === 'H12SSL-I') {
+    $bus = '0000:48:00.0';
+    $base = 3;
+  } elseif ($mobo_model === 'X11SPi-TF') {
+    $bus = '0000:00:17.0';
+    $base = 1;
+  } elseif ($mobo_model === 'ROMED8-2T') {
+    return [
+      'alias 1-1 /dev/disk/by-path/pci-0000:49:00.0-ata-7',
+      'alias 1-2 /dev/disk/by-path/pci-0000:49:00.0-ata-8',
+      'alias 1-3 /dev/disk/by-path/pci-0000:48:00.0-ata-8',
+      'alias 1-4 /dev/disk/by-path/pci-0000:48:00.0-ata-5',
+    ];
+  } elseif ($mobo_model === 'MS03-6L0-000') {
+    return [
+      'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1',
+      'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2',
+      'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
+      'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
+    ];
+  } elseif ($mobo_model === 'ME03-CE0-000') {
+    return [
+      'alias 1-1 /dev/disk/by-path/pci-0000:02:00.0-ata-5',
+      'alias 1-2 /dev/disk/by-path/pci-0000:02:00.0-ata-6',
+      'alias 1-3 /dev/disk/by-path/pci-0000:02:00.0-ata-7',
+      'alias 1-4 /dev/disk/by-path/pci-0000:02:00.0-ata-8',
+    ];
+  } else {
+    $bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*Intel.*\sSATA Controller/');
+    $base = 3;
+    if ($bus === null) {
+      fail('Error aliasing MI4: no SATA controller found');
+    }
+  }
+
+  $lines = [];
+  for ($i = 0; $i < 4; $i++) {
+    $port = $base + $i;
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-$bus-ata-$port$suffix");
+  }
+  return $lines;
+}
+
+function alias_av15_base($os_name, $os_version_id)
+{
+  $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
+  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*Intel.*SATA Controller/');
+  $sas_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*SAS3008/');
+  if ($sata_bus === null || $sas_bus === null) {
+    fail('Error aliasing AV15-BASE: missing SATA or SAS bus');
+  }
+  $lines = [];
+  for ($i = 0; $i < 8; $i++) {
+    add_alias($lines, 1, $i + 1, "/dev/disk/by-path/pci-$sas_bus-sas-phy$i-lun-0");
+  }
+  for ($i = 0; $i < 7; $i++) {
+    $port = $i + 2;
+    add_alias($lines, 1, $i + 9, "/dev/disk/by-path/pci-$sata_bus-ata-$port$suffix");
+  }
+  return $lines;
+}
+
+function alias_hl15_beast($server, $phy_order)
+{
+  [$model, $bus] = require_hba($server, 0, 'HOMELAB/HL15_BEAST');
+  $mobo = (string)($server['Motherboard']['Product Name'] ?? '');
+  if (isset($phy_order[$model]) && count($phy_order[$model]) >= 24) {
+    $hba_phy = $phy_order[$model];
+    $beast = array_merge(array_slice($hba_phy, 0, 15), array_reverse(array_slice($hba_phy, 20, 4)), array_reverse(array_slice($hba_phy, 16, 4)));
+    $lines = [];
+    foreach ($beast as $idx => $phy) {
+      add_alias($lines, 1, $idx + 1, "/dev/disk/by-path/pci-$bus-sas-phy$phy-lun-0");
+    }
+    return $lines;
+  }
+
+  if (stripos($mobo, 'ROMED8-2T') !== false && $model === 'HBA 9400-16i') {
+    if (!isset($phy_order[$model])) {
+      fail("Missing phy order for HL15_BEAST ROMED8 model: $model");
+    }
+    $lines = [];
+    $order = $phy_order[$model];
+    for ($j = 0; $j < 15; $j++) {
+      if (!isset($order[$j])) {
+        fail("Missing phy mapping for HL15_BEAST ROMED8 at index $j");
+      }
+      add_alias($lines, 1, $j + 1, "/dev/disk/by-path/pci-$bus-sas-phy{$order[$j]}-lun-0");
+    }
+
+    $addrs = sata_addresses();
+    if (count($addrs) < 2) {
+      fail('HL15_BEAST ROMED8 requires two SATA addresses');
+    }
+    $sata0 = $addrs[0];
+    $sata1 = $addrs[1];
+    $combined = array_merge(sata_port_paths($sata0), sata_port_paths($sata1));
+    if (!$combined) {
+      fail('HL15_BEAST ROMED8 requires SATA path observations');
+    }
+    if (!preg_match('/-ata-(\d+)(?:\.0)?$/', $combined[0], $m)) {
+      fail('Unable to parse HL15_BEAST ROMED8 SATA path');
+    }
+    $first_n = (int)$m[1];
+    $base = ($first_n >= 1 && $first_n <= 4) ? 1 : 5;
+    $ports = [$base, $base + 1, $base + 2, $base + 3];
+    [$sata0, $sata1] = [$sata1, $sata0];
+    $ports = array_reverse($ports);
+    foreach ($ports as $idx => $port) {
+      add_alias($lines, 1, 16 + $idx, "/dev/disk/by-path/pci-$sata0-ata-$port");
+    }
+    foreach ($ports as $idx => $port) {
+      add_alias($lines, 1, 20 + $idx, "/dev/disk/by-path/pci-$sata1-ata-$port");
+    }
+    return $lines;
+  }
+
+  fail("Unsupported HBA/motherboard for HL15_BEAST: $model / $mobo");
+}
+
+$server = load_json_file($server_info_path);
+if (!is_array($server)) {
+  fail("Unable to read server info JSON: $server_info_path");
+}
+
+$phy_order = [
+  'HBA 9405W-16i' => [9, 11, 13, 15, 8, 10, 12, 14, 1, 3, 5, 7, 0, 2, 4, 6],
+  'HBA 9400-16i' => [9, 11, 13, 15, 8, 10, 12, 14, 1, 3, 5, 7, 0, 2, 4, 6],
+  'SAS9305-16i' => [2, 3, 1, 0, 6, 7, 5, 4, 18, 19, 17, 16, 22, 23, 21, 20],
+  'SAS9305-24i' => [2, 3, 1, 0, 6, 7, 5, 4, 18, 19, 17, 16, 22, 23, 21, 20, 10, 11, 9, 8, 14, 15, 13, 12],
+  'AVAGO3108MegaRAID' => [25, 31, 37, 43, 26, 32, 38, 44, 27, 33, 39, 45, 28, 34, 41, 46, 29, 35, 40, 47, 30, 36, 42, 48],
+  '9600-24i' => [27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 41, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],
+  '9600-16i' => [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74],
+];
+
+$alias_template = [
+  'H16' => [
+    'AV15' => [23],
+    'Q30' => [15, 23],
+    'S45' => [15, 15, 23],
+    'XL60' => [15, 15, 15, 23],
+  ],
+  'H32' => [
+    'Q30' => [23, 24],
+    'S45' => [15, 23, 24],
+    'XL60' => [15, 15, 23, 24],
+  ],
+  'STORINATOR' => [
+    'AV15' => [15],
+    'Q30' => [15, 15],
+    'S45' => [15, 15, 15],
+    'XL60' => [15, 15, 15, 15],
+    'F32' => [16, 16],
+    'C8' => [8],
+    'MI4' => [0],
+  ],
+  'STORINATORUBM' => [
+    'MI4_UBM' => [4],
+    'C8_UBM' => [8],
+  ],
+  'HOMELAB' => [
+    'HL15_BEAST' => [23],
+    'HL15' => [15],
+    'HL4' => [4],
+    'HL8' => [4, 4],
+  ],
+  'PROFESSIONAL' => [
+    'PRO15' => [15],
+    'PRO4' => [4],
+    'PRO8' => [4, 4],
+  ],
+  'STORNADO' => [
+    'AV15' => [16, 16],
+    'F32' => [16, 16],
+  ],
+  '2USTORNADO' => [
+    '2U' => [16, 16],
+  ],
+  'F2STORNADO' => [
+    'F2' => [8, 8, 8, 8],
+    'VM8' => [8],
+    'VM16' => [8, 8],
+    'VM32' => [8, 8, 8],
+  ],
+  'AV15-BASE' => [
+    'AV15' => [0],
+  ],
+  'DESTROYINATOR' => [
+    'AV15' => [15, 0, 0, 0],
+    'Q30' => [15, 15, 0, 0],
+    'S45' => [15, 15, 15, 0],
+    'XL60' => [15, 15, 15, 15],
+  ],
+  'F8' => [
+    'F8X1' => [20],
+    'F8X2' => [20, 20],
+    'F8X3' => [20, 20, 20],
+  ],
+  'STUDIO' => [
+    'STUDIO8' => [4, 4],
+  ],
+  '?' => [
+    '?' => [0],
+  ],
+];
+
+$f8_order = [
+  'SAS9305-24i' => [0, 1, 3, 2, 4, 5, 7, 6, 8, 9, 11, 10, 20, 21, 23, 22, 16, 17, 19, 18, 12, 13, 15, 14],
+  '9600-24i' => [30, 29, 28, 27, 34, 33, 32, 31, 46, 45, 44, 43, 42, 41, 41, 39, 38, 37, 36, 35, 50, 49, 48, 47],
+];
+
+$style = (string)($server['Alias Style'] ?? '');
+$chassis = (string)($server['Chassis Size'] ?? '');
+$hbas = isset($server['HBA']) && is_array($server['HBA']) ? $server['HBA'] : [];
+$mobo_model = (string)($server['Motherboard']['Product Name'] ?? '');
+$os_name = (string)($server['OS NAME'] ?? '');
+$os_version_id = (string)($server['OS VERSION_ID'] ?? '');
+
+if ($style === '') {
+  fail('Missing Alias Style in server info');
+}
+
+$aliases = null;
+if ($style === 'BYPATH') {
+  $aliases = generate_by_path_aliases($server);
+} elseif ($style === 'HOMELAB' && $chassis === 'HL15_BEAST') {
+  $aliases = alias_hl15_beast($server, $phy_order);
+} elseif (count($hbas) > 0 && $chassis !== 'C8' && $style !== 'F8') {
+  $aliases = generate_hba_aliases($server, $alias_template, $phy_order);
+} elseif (count($hbas) > 0 && $chassis === 'C8') {
+  $aliases = generate_c8_aliases($server, $phy_order, $alias_template);
+} elseif ($chassis === 'MI4' && $style === 'STORINATOR') {
+  $aliases = alias_mi4($mobo_model, $os_name, $os_version_id);
+} elseif ($chassis === 'MI4_UBM' && $style === 'STORINATORUBM') {
+  $aliases = alias_mi4_ubm($mobo_model);
+} elseif ($style === 'AV15-BASE') {
+  $aliases = alias_av15_base($os_name, $os_version_id);
+} elseif ($style === 'DESTROYINATOR') {
+  fail('DESTROYINATOR without HBA is not supported in this port');
+} elseif ($style === 'F8') {
+  $aliases = generate_f8_aliases($server, $f8_order, $alias_template);
+} elseif ($style === 'HOMELAB' && $chassis === 'HL4') {
+  $aliases = alias_hl4();
+} elseif ($style === 'HOMELAB' && $chassis === 'HL8') {
+  $aliases = alias_hl8();
+} elseif ($style === 'PROFESSIONAL' && $chassis === 'PRO4') {
+  $aliases = alias_pro4();
+} elseif ($style === 'PROFESSIONAL' && $chassis === 'PRO8') {
+  $aliases = alias_pro8();
+} elseif ($style === 'STUDIO' && $chassis === 'STUDIO8') {
+  $aliases = alias_studio8();
+} elseif ($style === '?') {
+  $aliases = [];
+} else {
+  fail("Unsupported Alias Style/Chassis Size combination: $style/$chassis");
+}
+
+$version = tools_version($tools_version_path);
+$header = "# This file was generated using dmap $version (/opt/45drives/tools/dmap).";
+$payload = $header . "\n";
+if ($aliases) {
+  $payload .= implode("\n", $aliases) . "\n";
+}
+
+$out_dir = dirname($output_path);
+if (!is_dir($out_dir)) {
+  @mkdir($out_dir, 0755, true);
+}
+if (@file_put_contents($output_path, $payload) === false) {
+  fail("Unable to write output file: $output_path");
+}
+
+echo $output_path . "\n";
+exit(0);
