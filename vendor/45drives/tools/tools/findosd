@@ -1,0 +1,154 @@
+#!/bin/bash
+# findosd <osd.id>
+# Brett Kelly 2021
+# 45Drives
+# MUST BE RUN FROM OSD HOST WHERE OSD IS LOCATED
+# IF OSD HOST IS NOT THIS HOST EXIT
+
+help(){
+        cat << EOF
+Usage:	findosd -i <osd_id> -t [block_type] -n [name_style]
+	[-i] OSD id number
+	[-t] Type of OSD device, db,block or both. Defaults to both
+	[-n] Output naming style, device or lvm. Defaults to device
+	[-h] Displays this message
+EOF
+        exit 0
+}
+debug(){
+	echo OSD_ID:$OSD_ID
+	echo TYPE:$TYPE
+	echo NAME:$NAME
+	echo OSD_FSID:$OSD_FSID
+	echo OSD_HOST:$OSD_HOST
+	echo OSD_JSON:$OSD_JSON
+	echo OSD_BLOCK_DEVID:$OSD_BLOCK_DEVID
+	echo OSD_BLOCK_LVMID:$OSD_BLOCK_LVMID
+	echo OSD_DB_DEVID:$OSD_DB_DEVID
+	echo OSD_DB_LVMID:$OSD_DB_LVMID
+}
+## INPUTS
+
+DEVICE_PATH=/dev/disk/by/vdev
+CONFIG_PATH=/etc/
+DEBUG_FLAG=0
+
+while getopts i:t:n:hd flag
+do
+    case "${flag}" in
+        i) 	OSD_ID=${OPTARG};;
+        t) 	TYPE=${OPTARG}
+			if [ $TYPE != "db" ] && [ $TYPE != "block" ] && [ $TYPE != "both" ];then
+            	echo "Type (-t) can only be: 'db', 'block' or 'both'"
+            	exit 1
+        	fi
+			;;
+        n) 	NAME=${OPTARG}
+			if [ $NAME != "device" ] && [ $NAME != "lvm" ];then
+            	echo "Name (-n) can only be: 'device' or 'lvm'"
+            	exit 1
+        	fi
+			;;
+		h) help ;;
+		d) DEBUG_FLAG=1 ;;
+    esac
+done
+
+## CHECKS
+
+if [ -z $OSD_ID ];then
+	echo "OSD ID required (-i <int>). See findosd -h for more info"
+	exit 1
+fi
+if [ -z $TYPE ];then
+	TYPE="both"
+fi
+if [ -z $NAME ];then
+	NAME="device"
+fi	
+if ! command -v ceph-volume >/dev/null 2>&1;then
+	echo "ceph-osd (ceph-volume) is not installed"
+	exit 1
+fi
+if ! command -v jq >/dev/null 2>&1;then
+	echo "jq is not installed"
+	exit 1
+fi
+
+## MAIN
+
+# Find which host the OSD belongs to
+OSD_HOST=$(ceph osd find $OSD_ID 2>/dev/null | jq -r '.host')
+if [ "$OSD_HOST" == "null" ];then
+	OSD_HOST=$(ceph osd find $OSD_ID | jq -r '.crush_location.host')
+else
+	if [ "$OSD_HOST" != "$(hostname)" ];then
+		echo "osd.$OSD_ID is located on host=$OSD_HOST"
+		exit 1
+	fi
+fi
+
+# Get ceph-volume lvm info for osd.id
+OSD_JSON=$(ceph-volume lvm list --format json | jq -r --arg id "$OSD_ID" '.[] | .[] | select(.tags["ceph.osd_id"]==$id)')
+if [ -z "$OSD_JSON" ]; then
+	echo "Can't find osd.$OSD_ID on this host"
+	exit 1
+fi
+
+#Get devices from osd_ceph json
+if [ "$TYPE" == "block" ];then
+	OSD_BLOCK_DEVID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="block") | .devices | .[]')"
+	OSD_BLOCK_LVMID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="block") | .lv_path')"
+elif [ "$TYPE" == "db" ];then
+	OSD_DB_DEVID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="db") | .devices | .[]')"
+	OSD_DB_LVMID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="db") | .lv_path')"
+elif [ "$TYPE" == "both" ];then
+	OSD_BLOCK_DEVID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="block") | .devices | .[]')"
+	OSD_BLOCK_LVMID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="block") | .lv_path')"
+	OSD_DB_DEVID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="db") | .devices | .[]')"
+	OSD_DB_LVMID="$(echo $OSD_JSON | jq -r 'select(.tags["ceph.type"]=="db") | .lv_path')"
+fi
+
+# Display device names
+if [ $NAME == "device" ];then
+	IFS=$'\n' 
+	j=0
+	for i in $(cat $CONFIG_PATH/vdev_id.conf); do
+		bay=$(echo $i | grep alias | awk '{print $2}')
+		if [ ! -z "$bay" ];then 
+			BAY[$j]=$bay
+		fi
+		let j=j+1
+	done
+	if [ ! -z $OSD_BLOCK_DEVID ];then
+		for i in "${BAY[@]}";do
+			if [ "/dev/$i" == "$OSD_BLOCK_DEVID" ] || [ "/dev/disk/by-vdev/$i" == "$OSD_BLOCK_DEVID" ] ;then
+				echo "block=$OSD_BLOCK_DEVID"
+			elif [ "$(readlink -f /dev/$i)" == "$OSD_BLOCK_DEVID" ];then
+				echo "block=/dev/$i"
+			fi
+		done
+	fi
+	if [ ! -z $OSD_DB_DEVID ];then
+		for i in "${BAY[@]}";do
+			if [ "/dev/$i" == "$OSD_DB_DEVID" ] || [ "/dev/disk/by-vdev/$i" == "$OSD_DB_DEVID" ] ;then
+				echo "block.db=$OSD_DB_DEVID"
+			elif [ "$(readlink -f /dev/$i)" == "$OSD_DB_DEVID" ];then
+				echo "block.db=/dev/$i"
+			fi
+		done
+	fi
+fi
+
+if [ $NAME == "lvm" ];then
+	if [ ! -z $OSD_BLOCK_LVMID ];then
+		echo "block=$OSD_BLOCK_LVMID"
+	fi
+	if [ ! -z $OSD_DB_LVMID ];then
+		echo "block.db=$OSD_DB_LVMID"
+	fi
+fi
+
+if [ $DEBUG_FLAG -eq 1 ];then
+	debug
+fi

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+VERSION="${1:-0.1.1}"
+PACKAGE_NAME="45d-drivemap-assets-${VERSION}.txz"
+PACKAGE_DIR="${ROOT_DIR}/packages"
+PACKAGE_PATH="${PACKAGE_DIR}/${PACKAGE_NAME}"
+
+STAGE_DIR=$(mktemp -d)
+cleanup() {
+  rm -rf "${STAGE_DIR}"
+}
+trap cleanup EXIT
+
+TARGET_DIR="${STAGE_DIR}/usr/local/emhttp/plugins/45d-drivemap/assets/45d"
+mkdir -p "${TARGET_DIR}"
+cp -a "${ROOT_DIR}/assets/45d/45drives-disks" "${TARGET_DIR}/"
+
+mkdir -p "${PACKAGE_DIR}"
+rm -f "${PACKAGE_PATH}"
+tar -C "${STAGE_DIR}" -cJf "${PACKAGE_PATH}" .
+
+SHA256=$(shasum -a 256 "${PACKAGE_PATH}" | awk '{print $1}')
+
+printf '%s\n' "${PACKAGE_PATH}"
+printf '%s\n' "${SHA256}"

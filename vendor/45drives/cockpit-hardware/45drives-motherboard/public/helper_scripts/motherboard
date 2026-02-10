@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+################################################################################
+# motherboard:
+# 	used to return information about the motherboard in a .json
+#   format. This is a helper script for use with the
+#   cockpit-hardware package (https://github.com/45Drives/cockpit-hardware)
+#
+# Copyright (C) 2020, Mark Hooper   <mhooper@45drives.com>
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#   
+################################################################################
+
+import re
+import subprocess
+import os
+import json
+
+# supported motherboard manufacturers and models can be adjusted here
+g_dmi_mobo_fields = {
+	"Manufacturer":  ["Supermicro","ASRockRack","Giga Computing","Gigabyte","ASUSTeK COMPUTER INC."],
+	"Product Name":  [
+		"X11DPL-i",
+		"X11SPL-F",
+		"H11SSL-i",
+		"X11SSH-CTF",
+		"X11SSM-F",
+		"X11SPi-TF",
+		"X12SPL-F",
+		"H12SSL-i",
+		"X11SPH-nCTF",
+		"X11SPH-nCTPF",
+		"EPC621D8A",
+		"ME03-CE0-000",
+		"MS03-6L0-000",
+  		"MS73-HB0-000",
+    	"MZ73-LM0-000",
+     	"MC13-LE1-000",
+		"B550I AORUS PRO AX",
+		"EC266D2I-2T/AQC",
+		"ROMED8-2T/BCM",
+  		"ROMED8-2T",
+		"ProArt X870E-CREATOR WIFI"
+	],
+	"Serial Number": None
+}
+
+#supported CPU types
+g_dmi_cpu_fields = {
+	"Socket Designation":  ["CPU","CPU1","CPU2","P0","P1","CPU0","AM5","AM4"],
+	"Version":  [
+		"Intel(R) Xeon(R) Silver 4110 CPU @ 2.10GHz",
+		"AMD EPYC 7282 16-Core Processor",
+  		"AMD EPYC 7281 16-Core Processor",
+		"AMD EPYC 7252 8-Core Processor",
+		"AMD EPYC 7272 12-Core Processor",
+		"AMD EPYC 7452 32-Core Processor",
+		"AMD EPYC 8324P 32-Core Processor",
+		"AMD EPYC 9454 48-Core Processor",
+		"AMD EPYC 8224P 24-Core Processor",
+		"AMD EPYC 8534P 64-Core Emb Processor",
+	  	"AMD EPYC 8124P 16-Core Processor",
+      	"AMD EPYC 8024P 8-Core Processor",
+		"AMD Ryzen 9 7950X 16-Core Processor",
+		"AMD Ryzen 5 5500GT with Radeon Graphics",
+		"AMD Ryzen 7 5700G with Radeon Graphics",
+		"Intel(R) Xeon(R) CPU E3-1220 v6 @ 3.00GHz",
+		"Intel(R) Xeon(R) Silver 4210 CPU @ 2.10GHz",
+		"Intel(R) Xeon(R) Silver 4310 CPU @ 2.10GHz",
+		"Intel(R) Xeon(R) Silver 4410Y",
+		"Intel(R) Xeon(R) Gold 5418Y",
+		"Intel(R) Xeon(R) Gold 6230R CPU @ 2.10GHz",
+		"Intel(R) Xeon(R) Gold 6430",
+		"Intel(R) Xeon(R) E E-2434",
+		"Intel(R) Xeon(R) E E-2478",
+	],
+	"Current Speed": None,
+	"Max Speed": None,
+}
+
+g_ipmitool_sensor_fields = {
+    "CPU0 Temp": "(C)",
+	"CPU1 Temp": "(C)",
+	"CPU2 Temp": "(C)",
+	"TEMP_CPU": "(C)",
+	"PW Consumption": "(W)",
+	"FAN1": "(RPM)",
+	"FAN2": "(RPM)",
+	"FAN3": "(RPM)",
+	"FAN4": "(RPM)",
+	"FAN5": "(RPM)",
+	"FAN6": "(RPM)",
+	"FANA": "(RPM)",
+	"FANB": "(RPM)",
+	"P1-DIMMA1 Temp": " (C)",
+	"P1-DIMMB1 Temp": " (C)",
+	"P1-DIMMD1 Temp": " (C)",
+	"P1-DIMME1 Temp": " (C)",
+	"P2-DIMMA1 Temp": " (C)",
+	"P2-DIMMB1 Temp": " (C)",
+	"P2-DIMMD1 Temp": " (C)",
+	"P2-DIMME1 Temp": " (C)",
+	"CPU Temp": " (C)",
+	"DIMMA1 Temp": " (C)",
+	"DIMMA2 Temp": " (C)",
+	"DIMMB1 Temp": " (C)",
+	"DIMMB2 Temp": " (C)",
+	"DIMMC1 Temp": " (C)",
+	"DIMMC2 Temp": " (C)",
+	"DIMMD1 Temp": " (C)",
+	"DIMMD2 Temp": " (C)",
+	"DIMME1 Temp": " (C)",
+	"DIMME2 Temp": " (C)",
+	"DIMMF1 Temp": " (C)",
+	"DIMMF2 Temp": " (C)",
+	"DIMMG1 Temp": " (C)",
+	"DIMMH1 Temp": " (C)",
+	"DIMMABCD Temp": " (C)",
+	"DIMMEFGH Temp": " (C)",
+	"DDR4_A Temp": " (C)", #ASRockRack 
+	"DDR4_B Temp": " (C)", #ASRockRack
+	"DDR4_C Temp": " (C)", #ASRockRack
+	"DDR4_D Temp": " (C)", #ASRockRack
+	"DDR4_E Temp": " (C)", #ASRockRack
+	"DDR4_F Temp": " (C)",  #ASRockRack
+	"CPU0_TEMP": " (C)", #Giga Computing (GIGABYTE)
+ 	"CPU1_TEMP": " (C)", #Giga Computing (GIGABYTE)
+	"DIMMG0_TEMP": " (C)", #Giga Computing (GIGABYTE)
+    "DIMMG1_TEMP": " (C)", #Giga Computing (GIGABYTE)
+    "DIMMG2_TEMP": " (C)", #Giga Computing (GIGABYTE)
+    "DIMMG3_TEMP": " (C)", #Giga Computing (GIGABYTE)
+    "CPU0_FAN": " (RPM)", #Giga Computing (GIGABYTE)
+	"CPU1_FAN": " (RPM)", #Giga Computing (GIGABYTE)
+    "SYS_FAN1": " (RPM)", #Giga Computing (GIGABYTE)
+    "SYS_FAN2": " (RPM)", #Giga Computing (GIGABYTE)
+    "SYS_FAN3": " (RPM)", #Giga Computing (GIGABYTE)
+    "SYS_FAN4": " (RPM)", #Giga Computing (GIGABYTE)
+    "SYS_FAN5": " (RPM)", #Giga Computing (GIGABYTE)
+	"SYS_POWER": " (W)", #Giga Computing (GIGABYTE)
+	"TEMP_CPU": " (C)", 
+	"TEMP_DDR5_A1 ": " (C)",
+	"TEMP_DDR5_B1 ": " (C)",
+	"CPU1 Power": " (W)",
+}
+
+################################################################################
+# Name: get_motherboard_model
+# Args: None
+# Desc: This runs "dmidecode -t 2" and parses the output for specific fields
+#       corresponding to the keys in g_dmi_mobo_fields dictionary.
+#       if dmidecode discovers an unsupported motherboard model, or 
+#		manufacturer, it will append " (Generic)"  to the end of the 
+#       result.  
+################################################################################
+def get_motherboard_model():
+	mobo_json_str = get_motherboard_model_server_info()
+	if "?" not in mobo_json_str:
+		return mobo_json_str
+
+	mobo = []
+	try:
+		dmi_result = subprocess.Popen(["dmidecode","-t","2"],stdout=subprocess.PIPE,universal_newlines=True).stdout
+	except:
+		#print("ERROR: dmidecode is not installed")
+		return False
+	for line in dmi_result:
+		for field in g_dmi_mobo_fields.keys():
+			regex = re.search("^\s({fld}):\s+(.*)".format(fld=field),line)
+			if regex != None:
+				if g_dmi_mobo_fields[regex.group(1)] != None:
+					if regex.group(2) in g_dmi_mobo_fields[regex.group(1)]:
+						mobo.append((regex.group(1),regex.group(2)))
+					else:
+						mobo.append((regex.group(1),regex.group(2)+" (Generic)"))
+				else:
+					mobo.append((regex.group(1),regex.group(2)))
+	if len(mobo) > 0:
+		mobo_json_str = "{\"Motherboard\":["+json.dumps(dict(mobo))+"]}"
+	else:
+		mobo_json_str = get_motherboard_model_server_info()
+	return mobo_json_str
+
+def get_motherboard_model_server_info():
+	json_path = "/etc/45drives/server_info/server_info.json"
+	if os.path.exists(json_path):
+		f = open(json_path, "r")
+		si = json.load(f)
+		f.close()
+		mobo_obj = {
+			"Motherboard": [{
+				"Manufacturer": si["Motherboard"]["Manufacturer"],
+				"Product Name": si["Motherboard"]["Product Name"],
+				"Serial Number": si["Motherboard"]["Serial Number"]
+			}
+			]
+		}
+		return json.dumps(mobo_obj)
+	else:
+		return "{\"Motherboard\":[{\"Manufacturer\": \"?\", \"Product Name\": \"?\", \"Serial Number\": \"?\"}]}"
+
+def get_cpu_info():
+	cpu = []
+	try:
+		dmi_result = subprocess.Popen(["dmidecode","-t","4"],stdout=subprocess.PIPE,universal_newlines=True).stdout
+	except:
+		#print("ERROR: dmidecode is not installed")
+		return False
+	for line in dmi_result:
+		for field in g_dmi_cpu_fields.keys():
+			regex = re.search("^\s({fld}):\s+(.*)".format(fld=field),line)
+			if regex != None:
+				regex_group1_str = str(regex.group(1)).rstrip()
+				regex_group2_str = str(regex.group(2)).rstrip()
+				if g_dmi_cpu_fields[regex_group1_str] != None:
+					if regex_group2_str in g_dmi_cpu_fields[regex_group1_str]:
+						cpu.append((regex_group1_str,regex_group2_str))
+					elif field == "Socket Designation" and regex_group2_str == "CPU":
+						cpu.append((regex_group1_str,"CPU1"))
+					else:
+						cpu.append((regex_group1_str,regex_group2_str+" (Generic)"))
+				else:
+					cpu.append((regex_group1_str,regex_group2_str))
+	cpu_dict = {
+		"CPU":[]
+	}
+
+	cpu_count = len(cpu)//len(g_dmi_cpu_fields)
+	for i in range(0,cpu_count):
+		cpu_dict["CPU"].append(dict(cpu[i*len(g_dmi_cpu_fields):i*len(g_dmi_cpu_fields)+(len(g_dmi_cpu_fields))]))
+
+	return json.dumps(cpu_dict)
+
+def get_sensor_readings():
+	try:
+		ipmitool_sensor_result = subprocess.Popen(
+			["ipmitool","sensor"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True).stdout
+	except:
+		#print("ERROR: ipmitool is not installed")
+		return False
+
+	sensor_readings = []
+	for line in ipmitool_sensor_result:
+		for field in g_ipmitool_sensor_fields.keys():
+			regex = re.search("^({fld})\s+\|\s+(\S+).*".format(fld=field),line)
+			if regex != None:
+				# if regex.group(1) == "CPU Temp" or regex.group(1) == "CPU0_TEMP":
+				# 	# ipmitool does not use the socket name
+				# 	# we need to manually intervene and store it as
+				# 	# CPU1 Temp
+				# 	sensor_readings.append(
+				# 	("CPU1 Temp",regex.group(2)+g_ipmitool_sensor_fields[regex.group(1)])
+				# 	)
+				# else:
+				# 	# # skip empty entries
+				# 	# if regex.group(2) == 'na':
+				# 	# 	continue
+				# 	# else:
+					if regex.group(1) == "TEMP_CPU":
+						sensor_readings.append(
+							("CPU1 Temp", regex.group(2) + g_ipmitool_sensor_fields[regex.group(1)])
+						)
+					else:
+						reading = (regex.group(1), regex.group(2) + g_ipmitool_sensor_fields[regex.group(1)])
+						# print(reading)
+      
+						# All other readings are fine, use the field as captured.
+						sensor_readings.append(reading)
+	sensor_readings_json_str = "{\"Sensor Readings\":["+json.dumps(dict(sensor_readings))+"]}"
+	return sensor_readings_json_str
+
+
+def main():
+	mobo = get_motherboard_model()
+	cpu = get_cpu_info()
+	sensor_readings = get_sensor_readings()
+	
+	if mobo and cpu and sensor_readings:
+		print("{\"Motherboard Info\":[",mobo,",")
+		print(cpu,",")
+		print(sensor_readings,"]}")
+
+if __name__ == "__main__":
+    main()

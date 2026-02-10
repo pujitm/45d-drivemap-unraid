@@ -1,0 +1,200 @@
+[
+    {
+        "type": "cpu",
+        "id": 1,
+        "shape": "rect",
+        "x0": 570,
+        "y0": 180,
+        "width": 240,
+        "height": 360,
+        "diam": 0,
+        "filename": "CPU1.png"
+    },
+    {
+        "type": "CPU SLOT1 PCI-E 4.0 X16",
+        "id": "1",
+        "shape": "rect",
+        "x0": 48,
+        "y0": 149,
+        "width": 24,
+        "height": 257,
+        "diam": 24,
+        "filename": "PCI_SLOT_1.png"
+    },
+    {
+        "type": "CPU SLOT2 PCI-E 4.0 X8",
+        "id": "2",
+        "shape": "rect",
+        "x0": 112,
+        "y0": 149,
+        "width": 24,
+        "height": 163,
+        "diam": 24,
+        "filename": "PCI_SLOT_2.png"
+    },
+    {
+        "type": "CPU SLOT3 PCI-E 4.0 X16",
+        "id": "3",
+        "shape": "rect",
+        "x0": 168,
+        "y0": 149,
+        "width": 24,
+        "height": 257,
+        "diam": 24,
+        "filename": "PCI_SLOT_3.png"
+    },
+    {
+        "type": "CPU SLOT4 PCI-E 4.0 X8",
+        "id": "4",
+        "shape": "rect",
+        "x0": 232,
+        "y0": 149,
+        "width": 24,
+        "height": 163,
+        "diam": 24,
+        "filename": "PCI_SLOT_4.png"
+    },
+    {
+        "type": "CPU SLOT5 PCI-E 4.0 X16",
+        "id": "5",
+        "shape": "rect",
+        "x0": 293,
+        "y0": 149,
+        "width": 24,
+        "height": 257,
+        "diam": 24,
+        "filename": "PCI_SLOT_5.png"
+    },
+    {
+        "type": "CPU SLOT6 PCI-E 4.0 X16",
+        "id": "6",
+        "shape": "rect",
+        "x0": 356,
+        "y0": 149,
+        "width": 24,
+        "height": 257,
+        "diam": 24,
+        "filename": "PCI_SLOT_6.png"
+    },
+    {
+        "type": "CPU SLOT7 PCI-E 4.0 X16",
+        "id": "7",
+        "shape": "rect",
+        "x0": 416,
+        "y0": 149,
+        "width": 24,
+        "height": 257,
+        "diam": 24,
+        "filename": "PCI_SLOT_7.png"
+    },
+    {
+        "type": "I_SATA0",
+        "id": "0",
+        "shape": "rect",
+        "x0": 4,
+        "y0": 669,
+        "width": 22,
+        "height": 51,
+        "diam": 22,
+        "filename": "I_SATA0.png"
+    },
+    {
+        "type": "I_SATA1",
+        "id": "1",
+        "shape": "rect",
+        "x0": 28,
+        "y0": 669,
+        "width": 22,
+        "height": 51,
+        "diam": 22,
+        "filename": "I_SATA1.png"
+    },
+    {
+        "type": "DIMMA1",
+        "id": 1,
+        "shape": "rect",
+        "x0": 535,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMA1.png"
+    },
+    {
+        "type": "DIMMB1",
+        "id": 2,
+        "shape": "rect",
+        "x0": 510,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMB1.png"
+    },
+    {
+        "type": "DIMMC1",
+        "id": 3,
+        "shape": "rect",
+        "x0": 487,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMC1.png"
+    },
+    {
+        "type": "DIMMD1",
+        "id": 4,
+        "shape": "rect",
+        "x0": 463,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMD1.png"
+    },
+    {
+        "type": "DIMME1",
+        "id": 5,
+        "shape": "rect",
+        "x0": 824,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMME1.png"
+    },
+    {
+        "type": "DIMMF1",
+        "id": 6,
+        "shape": "rect",
+        "x0": 849,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMF1.png"
+    },
+    {
+        "type": "DIMMG1",
+        "id": 7,
+        "shape": "rect",
+        "x0": 871,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMG1.png"
+    },
+    {
+        "type": "DIMMH1",
+        "id": 8,
+        "shape": "rect",
+        "x0": 896,
+        "y0": 147,
+        "width": 20,
+        "height": 434,
+        "diam": 20,
+        "filename": "DIMMH1.png"
+    }
+]

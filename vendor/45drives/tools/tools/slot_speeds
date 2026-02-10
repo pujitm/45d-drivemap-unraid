@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+usage() {
+    local exit_code=$1
+    [ -z "$exit_code" ] && exit_code=0
+    printf 'Usage: %s slot_speeds [ -j ]\n' "$0"
+    echo
+    echo 'Options:'
+    echo '  -j - Print JSON formatted output'
+    exit "$exit_code"
+}
+
+JSON=false
+
+while getopts 'hj' opt; do
+    case $opt in
+    h)
+        usage 0
+        ;;
+    j)
+        JSON=true
+        ;;
+    *)
+        printf "Unknown flag: %s\n" "$opt" >&2
+        usage 2 >&2
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# shellcheck source=../ubm/ubm_funcs.sh
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../ubm/ubm_funcs.sh"
+
+SLOT_NAME_LUT=$(all_slot_names | jq -R '[ split(" ") | .[] | select(length > 0) ]')
+
+ALL_SLOT_SPEEDS_JSON=$(
+    set -o pipefail
+    storcli2 /call/eall/sall show all J | jq -e '
+    '"$SLOT_NAME_LUT"' as $slot_name_lut |
+    [
+        # keep only controller responses with "Drives List" in output
+        .Controllers[] | select(."Response Data"."Drives List") |
+        # save controller number to inject into each element of "Drives List"
+        (."Command Status"."Controller" | tonumber) as $controller_num |
+        # expand "Drives List" for transformation
+        ."Response Data"."Drives List"[] |
+        # transform each element of "Drives List"
+        {
+            slot_num: ."Drive Information"."EID:Slt" | split (":")[1] | tonumber,
+            enclosure_id: ."Drive Information"."EID:Slt" | split (":")[0] | tonumber,
+            controller_num: $controller_num,
+            type: ( ."Drive Information"."Intf" | if . then gsub("\\s*$"; "") else . end),
+            width: ."Drive Detailed Information"."Negotiated Link Width",
+            width_max: ."Drive Detailed Information"."Capable Link Width",
+            # a little tricky for rate as storcli2 returns array of link speeds
+            rate: (
+                ."Drive Detailed Information"."Path Information" |
+                if type == "array" then
+                    map(."Negotiated Speed" // ."NegotiatedSpeed") |
+                    map(select(.)) |
+                    if length > 0 then
+                        join(",")
+                    else
+                        null
+                    end
+                else
+                    .
+                end
+            ),
+            rate_max: ."Drive Detailed Information"."Capable Speed",
+            model: ( ."Drive Detailed Information"."Model" | if . then gsub("\\s*$"; "") else . end),
+            firmware_rev: ( ."Drive Detailed Information"."Firmware Revision Level" | if . then gsub("\\s*$"; "") else . end),
+            state: ."Drive Information"."State",
+            status: ."Drive Information"."Status",
+            dev_path: ."Drive Detailed Information"."OS Drive Name"
+        } |
+        . + { slot_name: ( $slot_name_lut[.slot_num] ) } |
+        . + { storcli_path: ("/c" + (.controller_num | tostring) + "/e" + (.enclosure_id | tostring) + "/s" + (.slot_num | tostring)) }
+    ] | sort_by(.slot_num)
+'
+) || {
+    EXIT_CODE=$?
+    echo "Error: failed to get slot info ($EXIT_CODE)" >&2
+    exit $EXIT_CODE
+}
+
+if $JSON; then
+    echo "$ALL_SLOT_SPEEDS_JSON"
+    exit 0
+fi
+
+(
+    jq -re '
+    '"$SLOT_NAME_LUT"' as $slot_name_lut |
+    # append placeholder objects at end for empty slots
+    . + (
+        # array of all possible slot numbers
+        [ range($slot_name_lut | length) ] |
+        # transform to placeholder objects
+        map({
+            slot_num: .,
+            slot_name: $slot_name_lut[.]
+        })
+        # remaining properties will just result in null
+    ) |
+    # remove duplicates from placeholder objects
+    unique_by(.slot_num) |
+    # prepend table headers
+    [{
+        slot_num: "Slot Num",
+        enclosure_id: "Encl ID",
+        controller_num: "Controller Num",
+        type: "Type",
+        width: "Width",
+        width_max: "Max Width",
+        rate: "Rate",
+        rate_max: "Max Rate",
+        model: "Model",
+        firmware_rev: "FW Rev",
+        state: "State",
+        status: "Status",
+        dev_path: "Device Path",
+        slot_name: "Slot Name",
+        storcli_path: "Storcli2 Path",
+    }] + . |
+    # transform objects into arrays for tsv output
+    .[] | [ .slot_num, .slot_name, .storcli_path, .type, .width, .width_max, .rate, .rate_max, .model, .firmware_rev, .state, .status, .dev_path ] |
+    # replace any nulls with "-"
+    map(. // "-") |
+    @tsv
+    ' <<<"$ALL_SLOT_SPEEDS_JSON"
+) | column -s $'\t' -t

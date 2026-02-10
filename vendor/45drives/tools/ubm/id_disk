@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# /opt/45drives/ubm/id_disk %k
+#
+# Outputs env variable values for SLOT_NUM and SLOT_NAME
+#
+# UDEV rule example:
+#
+# ENV{DEVTYPE}=="disk", IMPORT{program}="/opt/45drives/ubm/id_disk %k"
+#
+# Part of 45drives-tools
+#
+# Authors
+# Josh Boudreau <jboudreau@45drives.com> 2023
+#
+
+# shellcheck source=./ubm_funcs.sh
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/ubm_funcs.sh"
+
+check_ubm_func_support || exit 0
+
+BLOCK_DEV_KERNEL_NAME=$1
+BLOCK_DEV_KERNEL_NAME=$(normalize_block_dev_name "$1") || exit 0
+
+[ -z "$BLOCK_DEV_KERNEL_NAME" ] && echo "Must pass device kernel name" >&2 && exit 2
+
+set_env_var() {
+  local KEY=$1
+  local VAL=$2
+  eval export "$KEY"="$VAL"
+  printf '%s=%s\n' "$KEY" "$VAL"
+}
+
+if [ "$DEVTYPE" = "partition" ]; then
+  BLOCK_DEV_KERNEL_NAME=$(partition_to_parent_name "$BLOCK_DEV_KERNEL_NAME") || exit 0
+fi
+
+if [ -z "$SLOT_NUM" ]; then
+  # first check if available as attr
+  SLOT_ATTR_PATH=/sys/block/"$BLOCK_DEV_KERNEL_NAME"/device/slot
+  if [ -r "$SLOT_ATTR_PATH" ]; then
+    set_env_var SLOT_NUM "$(cat "$SLOT_ATTR_PATH")"
+  fi
+fi
+
+if [ -z "$SLOT_NUM" ]; then
+  # if still not set, fall back to storcli2
+  set_env_var WARN_SLOT_NUM_NOT_SET_VIA_ATTR 1
+  SLOT_NUM=$(block_dev_to_slot_num "$BLOCK_DEV_KERNEL_NAME") || exit 0
+  set_env_var SLOT_NUM "$SLOT_NUM"
+fi
+
+if UBM_MAP_KEY=$(get_map_key); then
+  set_env_var UBM_MAP_KEY "$UBM_MAP_KEY"
+else
+  perror "get_map_key failed"
+  exit 0
+fi
+
+if [ -z "$SLOT_NAME" ]; then
+  SLOT_NAME=$(slot_num_to_slot_name "$SLOT_NUM") || perror "Failed to lookup slot name for slot $SLOT_NUM" || exit 0
+  set_env_var SLOT_NAME "$SLOT_NAME"
+fi

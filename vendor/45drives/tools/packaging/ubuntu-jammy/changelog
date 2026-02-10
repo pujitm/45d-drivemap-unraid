@@ -1,0 +1,167 @@
+45drives-tools (4.0.32-1jammy) jammy; urgency=medium
+
+  * Hotfix - reverses hl4 slot order
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 19 Dec 2025 04:18:58 -0400
+
+45drives-tools (4.0.31-1jammy) jammy; urgency=medium
+
+  * Updates dmap with proper HL8 slot order
+
+ -- Jordan Keough <jkeough@45drives.com>  Wed, 17 Dec 2025 10:19:47 -0400
+
+45drives-tools (4.0.30-1jammy) jammy; urgency=medium
+
+  * Fix udev rule issues affecting /etc/vdev_id.conf
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Wed, 26 Nov 2025 08:11:51 -0400
+
+45drives-tools (4.0.29-1jammy) jammy; urgency=medium
+
+  * Flip SSD port order for ROMED8-2T HL15_BEAST
+  * Add missing install line for 68-0-custom-aliases.rules UDEV rule
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Tue, 25 Nov 2025 11:55:35 -0400
+
+45drives-tools (4.0.28-1jammy) jammy; urgency=medium
+
+  * swap phy cable order for 24i HBA BEAST SSDs
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Mon, 24 Nov 2025 11:37:18 -0400
+
+45drives-tools (4.0.27-1jammy) jammy; urgency=medium
+
+  * custom aliases through looking at parent pcieport device for Proxinator VM2
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Tue, 18 Nov 2025 13:56:41 -0400
+
+45drives-tools (4.0.26-1jammy) jammy; urgency=medium
+
+  * Add Proxinator VM2 support
+  * Add vdev aliasing support for native NVMe
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Wed, 12 Nov 2025 12:56:51 -0400
+
+45drives-tools (4.0.25-1jammy) jammy; urgency=medium
+
+  * Fix HL15 BEAST drive order for SSDs
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Mon, 10 Nov 2025 12:42:53 -0400
+
+45drives-tools (4.0.24-1jammy) jammy; urgency=medium
+
+  * Fix aliasing for HomeLab-HL15_BEAST with serialization stored in DMI
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Thu, 06 Nov 2025 08:01:17 -0400
+
+45drives-tools (4.0.23-1jammy) jammy; urgency=medium
+
+  * Fixes missing newline delimiter for ssd mapping in hl15beast_romed8
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 03 Nov 2025 10:55:48 -0400
+
+45drives-tools (4.0.22-1jammy) jammy; urgency=medium
+
+  * Fixes dmap issue for HL15_BEAST with ROMED8-2T mobo -> Need to have at least
+    1 ssd inserted for this to work reliably
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 03 Nov 2025 09:08:38 -0400
+
+45drives-tools (4.0.21-1jammy) jammy; urgency=medium
+
+  * Fixes HL15_BEAST drive mapping with ProArt mobo
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 03 Oct 2025 05:24:04 -0300
+
+45drives-tools (4.0.20-1jammy) jammy; urgency=medium
+
+  * Fixes infer_homelab_model func in server_identifer
+
+ -- Jordan Keough <jkeough@45drives.com>  Wed, 24 Sep 2025 06:18:04 -0300
+
+45drives-tools (4.0.19-2jammy) jammy; urgency=medium
+
+  * Forgot to merge some changes
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 22 Sep 2025 05:49:26 -0300
+
+45drives-tools (4.0.19-1jammy) jammy; urgency=medium
+
+  * Package adds support for 45Studio and HL15_BEAST chassis
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 22 Sep 2025 05:46:50 -0300
+
+45drives-tools (4.0.18-2jammy) jammy; urgency=medium
+
+  * Rebuilding with updated build-packages.yml -> create_release and sync_repo were
+    not executed
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 05 Sep 2025 05:06:44 -0300
+
+45drives-tools (4.0.18-1jammy) jammy; urgency=medium
+
+  * Adds DestroyinatorF16 and Studio8 support
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 05 Sep 2025 04:50:14 -0300
+
+45drives-tools (4.0.17-1jammy) jammy; urgency=medium
+
+  * Updates hba_lspci regex for MS73-HB0 boards to take both potential pci address
+    formats reported by lspci (eg. 0000:16:00.0 and 16:00.0)
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 08 Aug 2025 09:25:00 -0300
+
+45drives-tools (4.0.16-2jammy) jammy; urgency=medium
+
+  * Updates dmap to properly parse lshw command output
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 22 Jul 2025 11:48:57 -0300
+
+45drives-tools (4.0.16-1jammy) jammy; urgency=medium
+
+  * Add Destroyinator F16 support
+
+ -- Joshua Boudreau <jboudreau@45drives.com>  Tue, 15 Jul 2025 11:43:33 -0300
+
+45drives-tools (4.0.16-1jammy) jammy; urgency=medium
+
+  * update pci device paths for mi4 ubm
+
+ -- Brett Kelly <bkelly@45drives.com>  Thu, 10 Jul 2025 11:29:43 -0300
+
+45drives-tools (4.0.15-1jammy) jammy; urgency=medium
+
+  * adds support for ROMED8-2T board to server_identifier
+
+ -- Jordan Keough <jkeough@45drives.com>  Thu, 12 Jun 2025 13:08:22 -0300
+
+45drives-tools (4.0.11-1jammy) jammy; urgency=medium
+
+  * HL4/8 Updated get_sata_pci_addresses() function as it was not correctly filtering
+    for SATA controllers.
+
+ -- Brett Kelly <bkelly@45drives.com>  Tue, 06 May 2025 11:59:43 -0300
+
+45drives-tools (4.0.10-1jammy) jammy; urgency=medium
+
+  * added mi4+ME03-CE0 support
+
+ -- Brett Kelly <bkelly@45drives.com>  Tue, 29 Apr 2025 08:30:45 -0300
+
+45drives-tools (4.0.9-1jammy) jammy; urgency=medium
+
+  * added F16 support
+
+ -- Brett Kelly <bkelly@45drives.com>  Mon, 28 Apr 2025 11:27:07 -0300
+
+45drives-tools (4.0.8-1jammy) jammy; urgency=medium
+
+  * Adds support for C8 UBM chassis
+
+ -- Brett Kelly <bkelly@45drives.com>  Mon, 21 Apr 2025 13:45:19 -0300
+
+45drives-tools (4.0.0-1focal) jammy; urgency=medium
+
+  * jumping to 4.0 as we release for el9 and jammy
+
+ -- Brett Kelly <bkelly@45drives.com>  Fri, 07 Feb 2025 13:26:52 -0400

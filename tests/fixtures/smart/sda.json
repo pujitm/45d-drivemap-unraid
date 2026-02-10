@@ -1,0 +1,19 @@
+{
+  "model_family": "Seagate Exos X16",
+  "model_name": "ST12000NM0007",
+  "serial_number": "SAMPLE0001",
+  "user_capacity": { "bytes": 1099511627776 },
+  "firmware_version": "SC60",
+  "rotation_rate": 7200,
+  "ata_smart_attributes": {
+    "table": [
+      {"name": "Start_Stop_Count", "raw": {"string": "12"}},
+      {"name": "Power_Cycle_Count", "raw": {"string": "3"}},
+      {"name": "Temperature_Celsius", "raw": {"string": "35 (Min/Max 18/42)"}},
+      {"name": "Current_Pending_Sector", "raw": {"string": "0"}},
+      {"name": "Offline_Uncorrectable", "raw": {"string": "0"}}
+    ]
+  },
+  "power_on_time": {"hours": 12345},
+  "smart_status": {"passed": true}
+}

@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+################################################################################
+# network:
+# 	used to return information about the network configuration in a .json
+#   format. This is a helper script for use with the
+#   cockpit-hardware package (https://github.com/45Drives/cockpit-hardware)
+#
+# Copyright (C) 2020, Mark Hooper   <mhooper@45drives.com>
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#   
+################################################################################
+
+
+import re
+import subprocess
+import json
+import os
+
+g_dmi_fields = [
+	"Bus Address",
+	"Designation",
+	"Type"
+]
+
+# ASRock Board 
+BA_EPC612D8A = {
+	"ff00:16:00.0":"0000:17:00.0", #PCIE1
+	"ff00:16:02.0":"0000:1c:00.0", #PCIE2
+	"ff00:64:00.0":"0000:65:00.0", #PCIE4
+	"ff00:64:02.0":"0000:66:00.0", #PCIE3
+	"ff00:b2:00.0":"0000:b3:00.0", #PCIE6
+	"ff00:b2:02.0":"0000:b4:00.0" #PCIE5
+}
+
+# Gigabyte Board  
+PCIE_SLOT_TYPE_GIGABYTE_ME03 = {
+	"PCIE_1":"PCI Express 4 x16",
+	"PCIE_2":"PCI Express 4 x8",
+	"PCIE_3":"PCI Express 4 x16",
+	"PCIE_4":"PCI Express 5 x16",
+	"PCIE_5":"PCI Express 5 x16",
+	"PCIE_6":"PCI Express 5 x16",
+}
+
+BA_LUT_MZ73 = {
+	"PCIE_1": ["0000:a2:00.0"],
+	"PCIE_2": ["0000:81:00.0", "0000:84:00.0"],
+	"PCIE_3": ["0000:01:00.0"],
+	"PCIE_4": ["0000:41:00.0"],
+}
+
+PCIE_SLOT_LUT_B550I = {
+	"J10":"PCIEX16",
+	"J3700 M.2 Slot":"M2A_CPU",
+	"J3708 PCIE x4 slot from Promontory":"M2B_SB",
+}
+
+BA_LUT_B550I = {
+	# "0000:00:01.1":["0000:01:00.0", "0000:01:00.1"]
+ 	"PCIEX16":["0000:01:00.0", "0000:01:00.1"]
+}
+
+
+def get_motherboard_model_server_info():
+	json_path = "/etc/45drives/server_info/server_info.json"
+	if os.path.exists(json_path):
+		f = open(json_path, "r")
+		si = json.load(f)
+		f.close()
+		mobo_obj = {
+			"Motherboard": [{
+				"Manufacturer": si["Motherboard"]["Manufacturer"],
+				"Product Name": si["Motherboard"]["Product Name"],
+				"Serial Number": si["Motherboard"]["Serial Number"]
+			}
+			]
+		}
+		return json.dumps(mobo_obj)
+	else:
+		return "{\"Motherboard\":[{\"Manufacturer\": \"?\", \"Product Name\": \"?\", \"Serial Number\": \"?\"}]}"
+
+def is_BCM57416_onboard_ethernet(device_name):
+	return "BCM57416" in device_name
+
+def get_network_info():
+	try:
+		ipaddr_result = subprocess.Popen(
+			["ip","addr"],stdout=subprocess.PIPE, universal_newlines=True).stdout
+	except Exception as e:
+		print(f"Failed to run 'ip addr' command: {e}")
+		return False
+	
+	network_json_str = "{\"Network Info\":["
+	for line in ipaddr_result:
+		regex_connection = re.search("^(\w)\S+\s+(\w+).*state\s(\w+).*",line)
+		regex_link = re.search("^\s+link/(\S+)\s(\S+).*",line)
+		regex_inet = re.search("^\s+inet\s(\S+).*$",line)
+		regex_inet6 = re.search("^\s+inet6\s(\S+).*$",line)
+		if regex_connection != None:
+			network_json_str += (
+					"{\"Connection Name\":\"" + regex_connection.group(2)+"\"," +
+					"\"Connection State\":\"" + regex_connection.group(3)+"\"},"
+				)
+		if regex_link != None:
+			network_json_str = network_json_str[:-2]
+			network_json_str += (",\"Type\":\""+regex_link.group(1)+"\",")
+			network_json_str += ("\"MAC\":\""+regex_link.group(2)+"\"},")
+		if regex_inet != None:
+			network_json_str = network_json_str[:-2]
+			network_json_str += (",\"IPv4\":\""+regex_inet.group(1)+"\"},")
+		if regex_inet6 != None:
+			network_json_str = network_json_str[:-2]
+			network_json_str += (",\"IPv6\":\""+regex_inet6.group(1)+"\"},")
+
+	network_json_str = network_json_str[:-1]
+	network_json_str += "]}"
+
+	try:
+		lshw_result = subprocess.Popen(
+			["lshw","-C","network","-businfo","-quiet"],stdout=subprocess.PIPE, universal_newlines=True).stdout
+	except Exception as e:
+		print(f"Failed to run 'lshw' command: {e}")
+		return False
+	
+	lshw = []
+	for line in lshw_result:
+		regex_lshw = re.search("^pci@(\S+)\s+(\S+)\s+(\S+)\s+(\S+)",line)
+		if regex_lshw != None:
+			lshw.append([regex_lshw.group(1),regex_lshw.group(2),regex_lshw.group(4)])
+			# print(f"device: {regex_lshw.group(2)}, bus: {regex_lshw.group(1)}, description: {regex_lshw.group(4)}")
+	try:
+		dmi_result = subprocess.Popen(
+			["dmidecode","-t","9"],stdout=subprocess.PIPE, universal_newlines=True).stdout
+	except Exception as e:
+		print(f"Failed to run 'dmidecode' command: {e}")
+		return False
+
+	slot_entries = []
+	for line in dmi_result:
+		for field in g_dmi_fields:
+			regex = re.search("^\s+({fld}):\s+(.*)".format(fld=field),line)
+			if regex != None:
+				slot_entries.append((regex.group(1),regex.group(2)))
+	cards = []
+ 
+	# Initialize a set to track unique designations
+	used_designations = set()
+
+	motherboard_info = json.loads(get_motherboard_model_server_info())
+	motherboard_model = motherboard_info['Motherboard'][0].get('Product Name', '')
+
+	for i in range(0, len(slot_entries), len(g_dmi_fields)):
+		card = dict(slot_entries[i:i+len(g_dmi_fields)])
+		if "Designation" in card:
+			designation = card.get("Designation")
+			if designation == 'N/A':
+				card = None
+				continue
+			if motherboard_model == 'B550I AORUS PRO AX':
+				updated_designation = PCIE_SLOT_LUT_B550I[designation];
+				actual_slot = updated_designation
+			else:
+				# Ensure that the designation suffix (_A, _B, etc.) is removed
+				updated_designation = re.sub(r'_[A-Z]$', '', designation)  # This removes the trailing _A, _B, etc.
+				actual_slot = updated_designation  # Use the updated designation for slot comparison
+
+			if motherboard_model.startswith("ME03") and designation in PCIE_SLOT_TYPE_GIGABYTE_ME03:
+				card["Type"] = PCIE_SLOT_TYPE_GIGABYTE_ME03[actual_slot]
+			else:
+				card["Type"] = card.get("Type")  # Keep the original type if no match is found
+
+			card['Designation'] = actual_slot  # Update the card with the cleaned-up slot designation
+			# print(f"Updated card with cleaned designation and type: {card}")
+			
+			# Check if the designation has already been used
+			if actual_slot not in used_designations:
+				cards.append(card)  # Append only if the designation is unique
+				used_designations.add(actual_slot)  # Mark the designation as used
+			# else:
+				# print(f"Skipping duplicate designation: {actual_slot}")
+
+	for card in cards:
+		# print('updatedCard:', card)
+		if "Bus Address" in card.keys() and card["Bus Address"] in BA_EPC612D8A.keys():
+			card["Bus Address"] = BA_EPC612D8A[card["Bus Address"]]
+		
+		if motherboard_model.startswith("MZ73") and "Designation" in card.keys() and card['Designation'] in BA_LUT_MZ73.keys():
+			card["Bus Address"] = BA_LUT_MZ73[card["Designation"]]
+   
+		if motherboard_model == 'B550I AORUS PRO AX' and "Designation" in card.keys() and card['Designation'] in BA_LUT_B550I.keys():
+			card["Bus Address"] = BA_LUT_B550I[card["Designation"]]
+   
+	# Modify the valid_cards matching section
+	valid_cards = []
+	for card in cards:
+		matched_bus_address = None
+		for hw_entry in lshw:
+			device_name = hw_entry[2]
+			
+			# Exclude onboard ethernet from PCI matching
+			if motherboard_model.startswith('MZ73') or motherboard_model.startswith('ROMED8'):
+				if is_BCM57416_onboard_ethernet(device_name):
+					continue
+
+			# Check if Bus Address is a list or a single address
+			# card_bus_addresses = card["Bus Address"] if isinstance(card["Bus Address"], list) else [card["Bus Address"]]
+			if "Bus Address" not in card:
+				continue  # Skip cards with no bus address
+
+			card_bus_addresses = card["Bus Address"] if isinstance(card["Bus Address"], list) else [card["Bus Address"]]
+
+			# Compare each address in card_bus_addresses to hw_entry[0]
+			for card_bus_address in card_bus_addresses:
+				
+				# Normalize the formats for comparison (remove leading zeros, case insensitive)
+				normalized_card_bus_address = card_bus_address.lower().lstrip('0')
+				normalized_hw_entry_bus_address = hw_entry[0].lower().lstrip('0')
+
+				if normalized_card_bus_address == normalized_hw_entry_bus_address:
+					card["Connection Name"] = hw_entry[1]
+					matched_bus_address = card_bus_address  # Store the matching bus address
+					break  # Break inner loop if a match is found
+			if matched_bus_address:
+				card["Bus Address"] = matched_bus_address  # Set the card's bus address to the matching one
+				valid_cards.append(card)
+				break  # Break outer loop if a match is found
+
+	final_card_lst = []
+	for card in valid_cards:
+		card_duplicate = card.copy()
+
+		# Check if the connection name ends with "0np0" and replace it with "1np1"
+		if card_duplicate["Connection Name"].endswith("0np0"):
+			card_duplicate["Connection Name"] = card_duplicate["Connection Name"][:-4] + "1np1"
+		else:
+			# Otherwise, just change the last digit from '0' to '1'
+			card_duplicate["Connection Name"] = card_duplicate["Connection Name"][:-1] + "1"
+		
+		# Modify the Bus Address
+		card_duplicate["Bus Address"] = card_duplicate["Bus Address"][:-1] + "1"
+
+		final_card_lst.append(card)  # Append the original card
+		final_card_lst.append(card_duplicate)  # Append the modified duplicate
+
+	j_dict = json.loads(network_json_str)
+
+	for obj in j_dict["Network Info"]:
+		for card in final_card_lst:		
+			if obj["Connection Name"] == card["Connection Name"]:
+				obj["Bus Address"] = card["Bus Address"]
+				obj["Designation"] = card["Designation"]
+				obj["PCI Type"] = card["Type"]
+	
+				# regex = re.search(r"(PCIE_\d+|(?:SLOT|PCIE)\d+)",card["Designation"])
+				regex = re.search(r"(PCIE(?:X\d+|_\d+|\d+)|SLOT\d+)",card["Designation"])
+				if regex != None:
+					obj["PCI Slot"] = regex.group(1)
+
+	return json.dumps(j_dict)
+
+
+def main():
+	network = get_network_info()
+	if network:
+		print(json.dumps(json.loads(network), indent=4))
+	else:
+		print("Unable to provide network information.")
+		print("Please ensure that the following programs are installed:")
+		print("\tdmidecode, lshw")
+
+if __name__ == "__main__":
+	main()

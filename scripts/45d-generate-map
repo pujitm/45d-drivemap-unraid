@@ -1,0 +1,642 @@
+#!/usr/bin/php
+<?php
+$start_time = microtime(true);
+
+$output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
+$map_file = getenv('DRIVEMAP_OUTPUT_FILE') ?: ($output_dir . '/drivemap.json');
+$last_file = getenv('DRIVEMAP_LAST_FILE') ?: ($output_dir . '/drivemap.last');
+$log_file = getenv('DRIVEMAP_LOG_FILE') ?: ($output_dir . '/drivemap.log');
+$alias_file = getenv('DRIVEMAP_ALIAS_FILE') ?: '/etc/vdev_id.conf';
+$lsblk_source = getenv('DRIVEMAP_LSBLK') ?: '';
+$disks_ini_path = getenv('DRIVEMAP_DISKS_INI') ?: '/var/local/emhttp/disks.ini';
+$devs_ini_path = getenv('DRIVEMAP_DEVS_INI') ?: '/var/local/emhttp/devs.ini';
+$proc_partitions_path = getenv('DRIVEMAP_PROC_PARTITIONS') ?: '/proc/partitions';
+$sys_block_root = getenv('DRIVEMAP_SYS_BLOCK') ?: '/sys/block';
+$smartctl_dir = getenv('DRIVEMAP_SMARTCTL_DIR') ?: '';
+$disable_smart = getenv('DRIVEMAP_DISABLE_SMART') === '1';
+$default_server_info_generator = '/usr/local/emhttp/plugins/45d-drivemap/scripts/45d-generate-server-info';
+if (!is_file($default_server_info_generator)) {
+  $default_server_info_generator = __DIR__ . '/45d-generate-server-info';
+}
+$server_info_generator = getenv('DRIVEMAP_SERVER_INFO_GENERATOR') ?: $default_server_info_generator;
+
+@mkdir($output_dir, 0755, true);
+
+function script_command($script)
+{
+  if (!is_file($script)) {
+    return null;
+  }
+  $first_line = '';
+  $fh = @fopen($script, 'r');
+  if ($fh) {
+    $first_line = (string)fgets($fh);
+    fclose($fh);
+  }
+  $is_php = (bool)preg_match('/php/i', $first_line);
+  if ($is_php) {
+    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    return escapeshellarg($php) . ' ' . escapeshellarg($script);
+  }
+  if (is_executable($script)) {
+    return escapeshellarg($script);
+  }
+  return null;
+}
+
+if (is_file($server_info_generator)) {
+  $server_command = script_command($server_info_generator);
+  $server_output = [];
+  $server_code = 0;
+  if ($server_command !== null) {
+    exec($server_command . ' 2>&1', $server_output, $server_code);
+  }
+  if ($server_code !== 0 && $server_output) {
+    log_line($log_file, 'server_info generation failed: ' . implode(' | ', $server_output));
+  }
+}
+
+function log_line($path, $message)
+{
+  @file_put_contents($path, gmdate('c') . " " . $message . "\n", FILE_APPEND);
+}
+
+function format_bytes($bytes)
+{
+  if (!is_numeric($bytes)) {
+    return '';
+  }
+  $size = (float)$bytes;
+  if ($size <= 0) {
+    return '0 B';
+  }
+  $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  $idx = (int)floor(log($size, 1024));
+  $idx = min($idx, count($units) - 1);
+  $value = round($size / pow(1024, $idx), 2);
+  return $value . ' ' . $units[$idx];
+}
+
+function load_lsblk_map($lsblk_source)
+{
+  if ($lsblk_source !== '') {
+    if (is_file($lsblk_source)) {
+      $output = (string)@file_get_contents($lsblk_source);
+    } else {
+      $output = $lsblk_source;
+    }
+  } else {
+    $output = shell_exec('lsblk -P -b -o NAME,MODEL,SERIAL,SIZE,ROTA');
+  }
+  if (!$output) {
+    return [];
+  }
+  $map = [];
+  $lines = preg_split('/\r?\n/', trim($output));
+  foreach ($lines as $line) {
+    if ($line === '') {
+      continue;
+    }
+    $fields = [];
+    if (preg_match_all('/(\w+)="([^"]*)"/', $line, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $fields[$match[1]] = $match[2];
+      }
+    }
+    if (!isset($fields['NAME'])) {
+      continue;
+    }
+    $map[$fields['NAME']] = $fields;
+  }
+  return $map;
+}
+
+function load_disks_ini_map($paths)
+{
+  $sections = [];
+  foreach ($paths as $path) {
+    if (!is_file($path)) {
+      continue;
+    }
+    $ini = @parse_ini_file($path, true);
+    if (is_array($ini)) {
+      $sections = array_merge($sections, $ini);
+    }
+  }
+
+  $map = [];
+  foreach ($sections as $section) {
+    if (!is_array($section)) {
+      continue;
+    }
+    if (!isset($section['device'])) {
+      continue;
+    }
+    $device = (string)$section['device'];
+    if ($device === '') {
+      continue;
+    }
+    $map[$device] = $section;
+  }
+
+  return $map;
+}
+
+function count_partitions($device, $proc_partitions)
+{
+  if (!$device) {
+    return '';
+  }
+  $pattern = '/\b' . preg_quote($device, '/') . '(\d+|p\d+)\b/';
+  $count = 0;
+  foreach ($proc_partitions as $line) {
+    if (preg_match($pattern, $line)) {
+      $count++;
+    }
+  }
+  return (string)$count;
+}
+
+function disk_type($device, $lsblk_map, $disks_map, $sys_block_root)
+{
+  if (isset($lsblk_map[$device]['ROTA'])) {
+    return $lsblk_map[$device]['ROTA'] === '1' ? 'HDD' : 'SSD';
+  }
+  if (isset($disks_map[$device]['rotational'])) {
+    return $disks_map[$device]['rotational'] === '1' ? 'HDD' : 'SSD';
+  }
+  $rot_path = rtrim($sys_block_root, '/') . "/$device/queue/rotational";
+  if (is_file($rot_path)) {
+    $value = trim((string)@file_get_contents($rot_path));
+    if ($value === '1') {
+      return 'HDD';
+    }
+    if ($value === '0') {
+      return 'SSD';
+    }
+  }
+  return '';
+}
+
+function load_json_file($path)
+{
+  if (!is_file($path)) {
+    return null;
+  }
+  $contents = @file_get_contents($path);
+  if ($contents === false) {
+    return null;
+  }
+  $data = json_decode($contents, true);
+  return is_array($data) ? $data : null;
+}
+
+function load_server_info($output_dir)
+{
+  $paths = [
+    rtrim($output_dir, '/') . '/server_info.json',
+    '/etc/45drives/server_info/server_info.json',
+  ];
+  foreach ($paths as $path) {
+    $data = load_json_file($path);
+    if (is_array($data)) {
+      return $data;
+    }
+  }
+  return null;
+}
+
+function row_templates()
+{
+  return [
+    'H16' => [
+      'AV15' => [23],
+      'Q30' => [15, 23],
+      'S45' => [15, 15, 23],
+      'XL60' => [15, 15, 15, 23],
+    ],
+    'H32' => [
+      'Q30' => [15, 32],
+      'S45' => [15, 15, 32],
+      'XL60' => [15, 15, 15, 32],
+    ],
+    'STORINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'C8' => [4, 4],
+      'MI4' => [4],
+      'HL15' => [15],
+    ],
+    'STORINATORUBM' => [
+      'MI4_UBM' => [4],
+      'C8_UBM' => [8],
+    ],
+    'HOMELAB' => [
+      'HL15_BEAST' => [23],
+      'HL15' => [15],
+      'HL4' => [4],
+      'HL8' => [4, 4],
+    ],
+    'PROFESSIONAL' => [
+      'PRO15' => [15],
+      'PRO4' => [4],
+      'PRO8' => [4, 4],
+    ],
+    'STORNADO' => [
+      'AV15' => [32],
+      'F32' => [32],
+    ],
+    '2USTORNADO' => [
+      '2U' => [32],
+    ],
+    'F2STORNADO' => [
+      'F2' => [32],
+      'F16' => [16],
+      'VM4' => [4],
+      'VM8' => [8],
+      'VM16' => [16],
+      'VM32' => [32],
+    ],
+    'AV15-BASE' => [
+      'AV15' => [15],
+    ],
+    'DESTROYINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'F16' => [16],
+    ],
+    'F8' => [
+      'F8X1' => [20],
+      'F8X2' => [20, 20],
+      'F8X3' => [20, 20, 20],
+    ],
+    'SSG-6048R-E1CR24H' => [
+      'SSG-6048R-E1CR24H' => [4, 4, 4, 4, 4, 4],
+    ],
+    'HBA16' => [
+      '1X' => [16],
+      '2X' => [16, 16],
+      '3X' => [16, 16, 16],
+      '4X' => [16, 16, 16, 16],
+    ],
+    'STUDIO' => [
+      'STUDIO8' => [4, 4],
+    ],
+    'BYPATH' => [
+      'VM2' => [2],
+    ],
+  ];
+}
+
+function row_lengths_from_server_info($server_info)
+{
+  if (!is_array($server_info)) {
+    return null;
+  }
+  $style = isset($server_info['Alias Style']) ? strtoupper(trim((string)$server_info['Alias Style'])) : '';
+  $chassis = isset($server_info['Chassis Size']) ? strtoupper(trim((string)$server_info['Chassis Size'])) : '';
+  if ($style === '' || $chassis === '') {
+    return null;
+  }
+  $templates = row_templates();
+  if (!isset($templates[$style][$chassis])) {
+    return null;
+  }
+  return $templates[$style][$chassis];
+}
+
+function group_rows($slots, $row_lengths)
+{
+  if (is_array($row_lengths) && $row_lengths && array_sum($row_lengths) === count($slots)) {
+    $rows = [];
+    $offset = 0;
+    $count = count($slots);
+    foreach ($row_lengths as $length) {
+      if ($offset >= $count) {
+        break;
+      }
+      $chunk = array_slice($slots, $offset, (int)$length);
+      if ($chunk) {
+        $rows[] = $chunk;
+      }
+      $offset += (int)$length;
+    }
+    if ($offset < $count) {
+      $rows[] = array_slice($slots, $offset);
+    }
+    return $rows;
+  }
+
+  $rows_by_card = [];
+  foreach ($slots as $slot) {
+    if (!isset($slot['bay-id'])) {
+      continue;
+    }
+    [$card] = explode('-', $slot['bay-id'], 2);
+    $card = (int)$card;
+    if (!isset($rows_by_card[$card])) {
+      $rows_by_card[$card] = [];
+    }
+    $rows_by_card[$card][] = $slot;
+  }
+  ksort($rows_by_card);
+  return array_values($rows_by_card);
+}
+
+function decode_json_loose($text)
+{
+  $start = strpos($text, '{');
+  if ($start === false) {
+    return null;
+  }
+  $trimmed = substr($text, $start);
+  $decoded = json_decode($trimmed, true);
+  if (is_array($decoded)) {
+    return $decoded;
+  }
+  $end = strrpos($trimmed, '}');
+  if ($end !== false) {
+    $decoded = json_decode(substr($trimmed, 0, $end + 1), true);
+    if (is_array($decoded)) {
+      return $decoded;
+    }
+  }
+  return null;
+}
+
+function smart_data($dev_path, $smartctl_dir)
+{
+  if ($dev_path === '') {
+    return null;
+  }
+
+  $output = '';
+  if ($smartctl_dir !== '') {
+    $fixture_path = rtrim($smartctl_dir, '/') . '/' . basename($dev_path) . '.json';
+    if (is_file($fixture_path)) {
+      $output = (string)@file_get_contents($fixture_path);
+    }
+  }
+
+  if ($output === '') {
+    $command = 'smartctl -a ' . escapeshellarg($dev_path) . ' --json 2>/dev/null';
+    $output = (string)@shell_exec($command);
+  }
+
+  if ($output === '') {
+    return null;
+  }
+
+  $decoded = decode_json_loose($output);
+  if (!is_array($decoded)) {
+    return null;
+  }
+
+  $result = [
+    'model-family' => isset($decoded['model_family']) ? (string)$decoded['model_family'] : '',
+    'model-name' => isset($decoded['model_name']) ? (string)$decoded['model_name'] : '',
+    'serial' => isset($decoded['serial_number']) ? (string)$decoded['serial_number'] : '',
+    'capacity' => isset($decoded['user_capacity']['bytes']) ? format_bytes($decoded['user_capacity']['bytes']) : '',
+    'firm-ver' => isset($decoded['firmware_version']) ? (string)$decoded['firmware_version'] : '',
+    'rotation-rate' => isset($decoded['rotation_rate']) ? (string)$decoded['rotation_rate'] : '',
+    'start-stop-count' => '',
+    'power-cycle-count' => '',
+    'temp-c' => '',
+    'current-pending-sector' => '',
+    'offline-uncorrectable' => '',
+    'power-on-time' => '',
+    'health' => '',
+  ];
+
+  if (isset($decoded['ata_smart_attributes']['table']) && is_array($decoded['ata_smart_attributes']['table'])) {
+    foreach ($decoded['ata_smart_attributes']['table'] as $attribute) {
+      if (!is_array($attribute) || !isset($attribute['name'], $attribute['raw']['string'])) {
+        continue;
+      }
+      $name = (string)$attribute['name'];
+      $raw = trim((string)$attribute['raw']['string']);
+      if ($name === 'Start_Stop_Count') {
+        $result['start-stop-count'] = $raw;
+      } elseif ($name === 'Power_Cycle_Count') {
+        $result['power-cycle-count'] = $raw;
+      } elseif ($name === 'Temperature_Celsius') {
+        $temp = preg_split('/\s+/', $raw);
+        $result['temp-c'] = ($temp[0] ?? '') !== '' ? $temp[0] . ' C' : '';
+      } elseif ($name === 'Current_Pending_Sector') {
+        $result['current-pending-sector'] = $raw;
+      } elseif ($name === 'Offline_Uncorrectable') {
+        $result['offline-uncorrectable'] = $raw;
+      }
+    }
+  }
+
+  if ($result['temp-c'] === '' && isset($decoded['temperature']['current'])) {
+    $result['temp-c'] = (string)$decoded['temperature']['current'] . ' C';
+  }
+  if (isset($decoded['power_on_time']['hours'])) {
+    $result['power-on-time'] = (string)$decoded['power_on_time']['hours'];
+  }
+  if (isset($decoded['smart_status']['passed'])) {
+    $result['health'] = $decoded['smart_status']['passed'] ? 'OK' : 'POOR';
+  }
+
+  return $result;
+}
+
+function apply_smart_data(&$slot, $smart)
+{
+  if (!is_array($smart)) {
+    return;
+  }
+  foreach ($smart as $field => $value) {
+    if (!array_key_exists($field, $slot)) {
+      continue;
+    }
+    if ($value === '' || $value === null) {
+      continue;
+    }
+    $slot[$field] = $value;
+  }
+}
+
+function parse_aliases($alias_file)
+{
+  if (!is_file($alias_file)) {
+    return [];
+  }
+  $alias_lines = file($alias_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  if (!is_array($alias_lines)) {
+    return [];
+  }
+  $aliases = [];
+  foreach ($alias_lines as $line) {
+    $line = trim($line);
+    if ($line === '' || strpos($line, '#') === 0) {
+      continue;
+    }
+    if (preg_match('/^alias\s+(\d+)-(\d+)\s+(\S+)/', $line, $matches)) {
+      $aliases[] = [
+        'card' => (int)$matches[1],
+        'drive' => (int)$matches[2],
+        'path' => $matches[3],
+      ];
+    }
+  }
+  usort($aliases, function ($left, $right) {
+    if ($left['card'] === $right['card']) {
+      return $left['drive'] <=> $right['drive'];
+    }
+    return $left['card'] <=> $right['card'];
+  });
+  return $aliases;
+}
+
+function derive_meta($server_info)
+{
+  $meta = [
+    'disk-controller' => '',
+    'driver-version' => '',
+    'firmware-version' => '',
+  ];
+  if (!is_array($server_info) || !isset($server_info['HBA']) || !is_array($server_info['HBA'])) {
+    return $meta;
+  }
+
+  $controllers = [];
+  $drivers = [];
+  $firmware = [];
+  foreach ($server_info['HBA'] as $hba) {
+    if (!is_array($hba)) {
+      continue;
+    }
+    if (!empty($hba['Model'])) {
+      $controllers[] = (string)$hba['Model'];
+    }
+    if (!empty($hba['Driver Version'])) {
+      $drivers[] = (string)$hba['Driver Version'];
+    } elseif (!empty($hba['Kernel Driver'])) {
+      $drivers[] = (string)$hba['Kernel Driver'];
+    }
+    if (!empty($hba['Firmware Version'])) {
+      $firmware[] = (string)$hba['Firmware Version'];
+    }
+  }
+
+  if ($controllers) {
+    $meta['disk-controller'] = implode(', ', array_values(array_unique($controllers)));
+  }
+  if ($drivers) {
+    $meta['driver-version'] = implode(', ', array_values(array_unique($drivers)));
+  }
+  if ($firmware) {
+    $meta['firmware-version'] = implode(', ', array_values(array_unique($firmware)));
+  }
+
+  return $meta;
+}
+
+if (!is_file($alias_file)) {
+  log_line($log_file, "Missing alias file: $alias_file");
+  fwrite(STDERR, "Missing alias file: $alias_file\n");
+  exit(1);
+}
+
+$aliases = parse_aliases($alias_file);
+if (!$aliases) {
+  log_line($log_file, 'No aliases found in vdev_id.conf');
+  fwrite(STDERR, "No aliases found in vdev_id.conf\n");
+  exit(1);
+}
+
+$lsblk_map = load_lsblk_map($lsblk_source);
+$disks_map = load_disks_ini_map([$disks_ini_path, $devs_ini_path]);
+$proc_partitions = @file($proc_partitions_path, FILE_IGNORE_NEW_LINES) ?: [];
+$slots = [];
+foreach ($aliases as $alias) {
+  $card = $alias['card'];
+  $drive = $alias['drive'];
+  $path = $alias['path'];
+  $bay_id = $card . '-' . $drive;
+
+  $slot = [
+    'dev-by-path' => $path,
+    'bay-id' => $bay_id,
+    'occupied' => false,
+    'dev' => '',
+    'partitions' => '',
+    'model-family' => '',
+    'model-name' => '',
+    'serial' => '',
+    'capacity' => '',
+    'firm-ver' => '',
+    'rotation-rate' => '',
+    'start-stop-count' => '',
+    'power-cycle-count' => '',
+    'temp-c' => '',
+    'current-pending-sector' => '',
+    'offline-uncorrectable' => '',
+    'power-on-time' => '',
+    'health' => '',
+    'disk_type' => '',
+  ];
+
+  if (is_link($path)) {
+    $slot['occupied'] = true;
+    $real = realpath($path);
+    if ($real) {
+      $slot['dev'] = $real;
+      $device = basename($real);
+      $slot['partitions'] = count_partitions($device, $proc_partitions);
+
+      if (isset($lsblk_map[$device])) {
+        $info = $lsblk_map[$device];
+        $slot['model-name'] = $info['MODEL'] ?? '';
+        $slot['serial'] = $info['SERIAL'] ?? '';
+        $slot['capacity'] = isset($info['SIZE']) ? format_bytes($info['SIZE']) : '';
+      }
+
+      if (isset($disks_map[$device])) {
+        $disk = $disks_map[$device];
+        if (!$slot['serial'] && !empty($disk['id'])) {
+          $slot['serial'] = (string)$disk['id'];
+        }
+        if (!$slot['capacity'] && isset($disk['sectors'], $disk['sector_size'])) {
+          $slot['capacity'] = format_bytes((float)$disk['sectors'] * (float)$disk['sector_size']);
+        }
+        if (!empty($disk['temp']) && $disk['temp'] !== '*') {
+          $slot['temp-c'] = trim((string)$disk['temp']) . ' C';
+        }
+      }
+
+      $slot['disk_type'] = disk_type($device, $lsblk_map, $disks_map, $sys_block_root);
+
+      if (!$disable_smart) {
+        apply_smart_data($slot, smart_data($slot['dev'], $smartctl_dir));
+      }
+    }
+  }
+  $slots[] = $slot;
+}
+
+$server_info = load_server_info($output_dir);
+$row_lengths = row_lengths_from_server_info($server_info);
+$rows = group_rows($slots, $row_lengths);
+$meta = derive_meta($server_info);
+
+$duration = microtime(true) - $start_time;
+$timestamp = gmdate('c');
+
+$payload = [
+  'rows' => $rows,
+  'meta' => $meta,
+  'lsdevDuration' => round($duration, 2),
+  'lastUpdated' => $timestamp,
+];
+
+file_put_contents($map_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+file_put_contents($last_file, $timestamp . "\n");
+log_line($log_file, 'generated map');

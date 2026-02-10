@@ -1,0 +1,646 @@
+cockpit-45drives-hardware (2.5.8-1focal) focal; urgency=medium
+
+  * Fixes F16 not showing in Disks + System tabs, Fixes PCIE slots showing Available
+    when a HBA card was detected, removes unused system script from System module
+    code
+
+ -- Jordan Keough <jkeough@45drives.com>  Thu, 04 Dec 2025 07:30:26 -0400
+
+cockpit-45drives-hardware (2.5.7-1focal) focal; urgency=medium
+
+  * update for f16 support
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 03 Dec 2025 13:11:18 -0400
+
+cockpit-45drives-hardware (2.5.6-1focal) focal; urgency=medium
+
+  * Adds HL15_BEAST support
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 22 Sep 2025 05:42:01 -0300
+
+cockpit-45drives-hardware (2.5.5-1focal) focal; urgency=medium
+
+  * Adds support for new 45Studio 8-bay server
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 05 Sep 2025 12:13:52 -0300
+
+cockpit-45drives-hardware (2.5.4-2focal) focal; urgency=medium
+
+  * Building new package + release as users were experiencing issues with scripts/possibly
+    not updating
+
+ -- Jordan Keough <jkeough@45drives.com>  Thu, 31 Jul 2025 09:41:55 -0300
+
+cockpit-45drives-hardware (2.5.3-2focal) focal; urgency=medium
+
+  * Fixes pci script to filter duplicate slot data from PCIE2 in M2 slot
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 13 Jun 2025 08:33:46 -0300
+
+cockpit-45drives-hardware (2.5.3-1focal) focal; urgency=medium
+
+  * Adds support for ROMED8-2T/BCM motherboard
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 13 Jun 2025 07:35:19 -0300
+
+cockpit-45drives-hardware (2.5.2-2focal) focal; urgency=medium
+
+  * Fixes some issues with CPU/RAM temperature reporting, and data display in Motherboard
+
+       popups having final character cut off
+
+ -- Brett Kelly <bkelly@45drives.com>  Tue, 25 Mar 2025 13:14:04 -0300
+
+cockpit-45drives-hardware (2.5.2-1focal) focal; urgency=medium
+
+  * Fixes some issues with CPU/RAM temperature reporting, and data display in Motherboard
+    popups having final character cut off
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 24 Feb 2025 11:32:16 -0400
+
+cockpit-45drives-hardware (2.5.1-1focal) focal; urgency=medium
+
+  * Fixes bug with Disk module where zfs_info did not properly show all vdevs in
+    a pool
+
+ -- Jordan Keough <jkeough@45drives.com>  Wed, 22 Jan 2025 07:37:59 -0400
+
+cockpit-45drives-hardware (2.5.0-1focal) focal; urgency=medium
+
+  * Adds Proxinator line to Hardware Modules
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 10 Jan 2025 10:57:03 -0400
+
+cockpit-45drives-hardware (2.4.9-1focal) focal; urgency=medium
+
+  * Fixes missing Professional chassis images in System page
+
+ -- Jordan Keough <jkeough@45drives.com>  Thu, 05 Dec 2024 09:32:24 -0400
+
+cockpit-45drives-hardware (2.4.8-1focal) focal; urgency=medium
+
+  * Adds support for 45Professional line and fixes some issues with hardware scripts
+    and data display
+
+ -- Jordan Keough <jkeough@45drives.com>  Wed, 04 Dec 2024 10:56:11 -0400
+
+cockpit-45drives-hardware (2.4.7-1focal) focal; urgency=medium
+
+  * Adds HL4/HL8 support to hardware modules
+
+ -- Jordan Keough <jkeough@45drives.com>  Wed, 20 Nov 2024 04:18:04 -0400
+
+cockpit-45drives-hardware (2.4.6-2focal) focal; urgency=medium
+
+  * push to stable build
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 11 Nov 2024 07:52:24 -0400
+
+cockpit-45drives-hardware (2.4.6-1focal) focal; urgency=medium
+
+  * Push to stable with Hardware Refresh updates
+
+ -- Jordan Keough <jkeough@45drives.com>  Mon, 11 Nov 2024 07:50:02 -0400
+
+cockpit-45drives-hardware (2.4.5-1focal) focal; urgency=medium
+
+  * b
+  * 1
+  * Adds support for new 1UGW mobo (MC13-LE1)
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 15 Oct 2024 05:58:15 -0300
+
+cockpit-45drives-hardware (2.4.4-1focal) focal; urgency=medium
+
+  * Fully adds MZ73 board support
+
+ -- Jordan Keough <jkeough@45drives.com>  Thu, 19 Sep 2024 08:58:10 -0300
+
+cockpit-45drives-hardware (2.4.3-1focal) focal; urgency=medium
+
+  * Adds Gigabyte MS73-HB0 motherboard support
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 06 Sep 2024 07:53:13 -0300
+
+cockpit-45drives-hardware (2.4.2-1focal) focal; urgency=medium
+
+  * Adds second new Gigabyte motherboard (MS03-6L0) and fixes error in SATA Helper
+    script so all sata drives plugged into mobo ports show in 45Drives Motherboard
+    module
+  * Updating build number due to packaging tag conflict
+
+ -- Jordan Keough <jkeough@45drives.com>  Fri, 23 Aug 2024 07:56:52 -0300
+
+cockpit-45drives-hardware (2.4.1-1focal) focal; urgency=medium
+
+  * Adds ME03 board support with finalized assets
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 20 Aug 2024 11:49:07 -0300
+
+cockpit-45drives-hardware (2.4.0-1focal) focal; urgency=medium
+
+  * TESTING - Adds Gigabyte  ME03-CE0 Motherboard Support
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 20 Aug 2024 06:48:43 -0300
+
+cockpit-45drives-hardware (2.3.6-2focal) focal; urgency=medium
+
+  * Incrementing build to resolve conflict
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 09 Jul 2024 12:37:48 -0300
+
+cockpit-45drives-hardware (2.3.6-1focal) focal; urgency=medium
+
+  * Fixes a bug with H12SSL-i motherboards ID's case sensitivity
+
+ -- Jordan Keough <jkeough@45drives.com>  Tue, 09 Jul 2024 12:33:03 -0300
+
+cockpit-45drives-hardware (2.3.5-2focal) focal; urgency=medium
+
+  * Added support for X11SPH-nCTF and X11SPH-nCTPF motherboards in 45Drives Motherboard
+    Module.
+  * Fixed a bug which caused drives to render in the improper row for F8X2 and F8X3
+    Servers.
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 25 Jan 2024 05:07:55 -0400
+
+cockpit-45drives-hardware (2.3.5-1focal) focal; urgency=medium
+
+  * added support for X11SPH-nCTF and X11SPH-nCTPF motherboards in 45Drives Motherboard
+    Module.
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 19 Jan 2024 09:23:15 -0400
+
+cockpit-45drives-hardware (2.3.4-1focal) focal; urgency=medium
+
+  * Releasing v2.3.4 to stable repo
+  * added support for HL15 servers in 45Drives-Disks and 45Drives-System
+  * added support for X12SPL-F Motherboards in all modules
+  * added support for Stornado F2 servers
+  * updated 45drives-tools dependency minimum version to 3.0.1
+  * added support for H12SSL-i Motherboard in all modules
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 21 Nov 2023 05:59:56 -0400
+
+cockpit-45drives-hardware (2.3.3-4focal) focal; urgency=medium
+
+  * added chassis image to system tab for Stornado F2
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 16 Nov 2023 11:29:15 -0400
+
+cockpit-45drives-hardware (2.3.3-3focal) focal; urgency=medium
+
+  * updated name of chassis used for new NVME Stornado from 2UTM to F2
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 16 Nov 2023 06:25:53 -0400
+
+cockpit-45drives-hardware (2.3.3-2focal) focal; urgency=medium
+
+  * changed all instances of 2UTM to F2 for new Stornado server
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 16 Nov 2023 05:42:24 -0400
+
+cockpit-45drives-hardware (2.3.3-1focal) focal; urgency=medium
+
+  * added support for HL15 servers in 45Drives-Disks and 45Drives-System
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 04 Oct 2023 07:11:45 -0300
+
+cockpit-45drives-hardware (2.3.2-1focal) focal; urgency=medium
+
+  * Updated disks module to inform user that Ceph Gateways are not compatible
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 23 Jun 2023 08:43:38 -0300
+
+cockpit-45drives-hardware (2.3.1-3focal) focal; urgency=medium
+
+  * added support for X12SPL-F Motherboards in all modules
+  * updated dmidecode dependency to require 3.3 or later
+  * updated motherboard layout files to include mask image paths
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 22 Mar 2023 09:59:04 -0300
+
+cockpit-45drives-hardware (2.3.1-2focal) focal; urgency=medium
+
+  * updated dmidecode dependency to require 3.3 or later
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 22 Mar 2023 07:18:04 -0300
+
+cockpit-45drives-hardware (2.3.1-1focal) focal; urgency=medium
+
+  * added support for X12SPL-F Motherboards in all modules
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 21 Mar 2023 07:21:01 -0300
+
+cockpit-45drives-hardware (2.3.0-3focal) focal; urgency=medium
+
+  * updated 45Drives-tools dependency to minimum version 2.2.0
+  * system tab will show HBA firmware version
+  * disks tab will show HBA firmware version
+  * added support for 9361-24i cards in all modules
+  * added support for melanox MT27800 cards in all modules
+  * fixed 9600 series card scaling issue in 45Drives-motherboard
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 27 Feb 2023 11:27:48 -0400
+
+cockpit-45drives-hardware (2.3.0-2focal) focal; urgency=medium
+
+  * fixed 9600 series card scaling issue in 45Drives-motherboard
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 16 Feb 2023 12:27:53 -0400
+
+cockpit-45drives-hardware (2.3.0-1focal) focal; urgency=medium
+
+  * updated 45Drives-tools dependency to minimum version 2.2.0
+  * system tab will show HBA firmware version
+  * disks tab will show HBA firmware version
+  * added support for 9361-24i cards in all modules
+  * added support for melanox MT27800 cards in all modules
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 16 Feb 2023 06:45:24 -0400
+
+cockpit-45drives-hardware (2.2.2-2focal) focal; urgency=medium
+
+  * Added support for F8X servers in Disks and System modules
+  * updated 45Drives-tools dependency
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 02 Feb 2023 05:36:07 -0400
+
+cockpit-45drives-hardware (2.2.2-1focal) focal; urgency=medium
+
+  * updated zfs_info script to fix bug when single disk vdevs are encountered
+  * single device vdevs are now reported as both a disk and vdev by zfs_info script
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 29 Nov 2022 12:30:50 -0400
+
+cockpit-45drives-hardware (2.2.1-6focal) focal; urgency=medium
+
+  * fixed drive placement error in 45drives-disks for XL60-H32 units not displaying
+    disk 4-10 properly
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 31 Oct 2022 12:03:49 -0300
+
+cockpit-45drives-hardware (2.2.1-5focal) focal; urgency=medium
+
+  * added support for 9400-16i HBA cards in System, Disks and Motherbaord Modules
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 31 Oct 2022 11:29:06 -0300
+
+cockpit-45drives-hardware (2.2.1-4focal) focal; urgency=medium
+
+  * Incremented build for release on repo
+  * added support for BCM57412 network cards
+  * added support for 9361-16i HBA cards
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 28 Sep 2022 05:16:29 -0300
+
+cockpit-45drives-hardware (2.2.1-3focal) focal; urgency=medium
+
+  * added support for 9361-16i HBA cards
+  * added support for BCM57412 network cards
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 28 Sep 2022 05:03:30 -0300
+
+cockpit-45drives-hardware (2.2.1-2focal) focal; urgency=medium
+
+  * modified how network cards are detected in 45drives-system's pci helper script
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 14 Sep 2022 10:43:46 -0300
+
+cockpit-45drives-hardware (2.2.1-1focal) focal; urgency=medium
+
+  * updated zfs_info script in 45drives-disks to inform user about the requirement
+    for zfs devices to be using device aliases
+  * added support for ASRockRack EPC621D8A Motherboards in 45Drives-motherboard
+  * updated 45drives-tools dependency to 2.1.0
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 14 Sep 2022 05:38:36 -0300
+
+cockpit-45drives-hardware (2.2.0-2focal) focal; urgency=medium
+
+  * added support for ASRockRack EPC621D8A Motherboards
+  * updated how PCI cards are rendered in 45drives-motherboard
+  * updated helper scripts in 45drives-System and 45drives-Motherboard to work with
+    ASRockRack EPC621D8A Motherboards
+  * updated 45drives-tools dependency to 2.1.0
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 23 Aug 2022 09:34:32 -0300
+
+cockpit-45drives-hardware (2.1.3-9focal) focal; urgency=medium
+
+  * improved error handling in zfs_info script
+  * warning messages will now be produced if zpools aren't created with device aliasing
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 26 Jul 2022 09:59:41 -0300
+
+cockpit-45drives-hardware (2.1.3-8focal) focal; urgency=medium
+
+  * improved zfs_info script error handling
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 22 Jul 2022 09:00:50 -0300
+
+cockpit-45drives-hardware (2.1.3-7focal) focal; urgency=medium
+
+  * updated network helper script in 45drives-system to use ip -j addr instead of
+    ip addr
+  * made adjustments to popup content in 45drives-motherboard so as to not cut off
+    end characters
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 06 Jul 2022 10:21:00 -0300
+
+cockpit-45drives-hardware (2.1.3-6focal) focal; urgency=medium
+
+  * fixed bug in motherboard cutting off last character in hba card popups
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 06 Jul 2022 09:13:27 -0300
+
+cockpit-45drives-hardware (2.1.3-5focal) focal; urgency=medium
+
+  * updated how addresses are reported in network helper script in 45drives-system
+  * fixed bug in motherboard cutting off last characters when mousing over X540-AT2
+    cards
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 06 Jul 2022 08:23:26 -0300
+
+cockpit-45drives-hardware (2.1.3-4focal) focal; urgency=medium
+
+  * updated network helper script in 45drives-system to use ip -j addr instead of
+    ip addr
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 06 Jul 2022 07:59:55 -0300
+
+cockpit-45drives-hardware (2.1.3-3focal) focal; urgency=medium
+
+  * updated network script in 45drives-system to use ip addr command with json output
+  * added iproute2 dependency for ubuntu
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 04 Jul 2022 11:19:24 -0300
+
+cockpit-45drives-hardware (2.1.3-2focal) focal; urgency=medium
+
+  * fixed incorrect path when calling the network script in 45drives-motherboard
+    module
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 30 Jun 2022 11:20:39 -0300
+
+cockpit-45drives-hardware (2.1.3-1focal) focal; urgency=medium
+
+  * updated scripts to use lspci instead of storcli64 in 45drives-motherboard and
+    45drives-system modules
+  * updated 45drives-tools dependency to 2.0.8 minimum version
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 30 Jun 2022 06:56:11 -0300
+
+cockpit-45drives-hardware (2.1.2-3focal) focal; urgency=medium
+
+  * modified 45drives-tools dependency
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 30 Jun 2022 06:23:37 -0300
+
+cockpit-45drives-hardware (2.1.2-2focal) focal; urgency=medium
+
+  * added support for 9600 series HBA cards
+  * updated 45drives-tools dependency to 2.0.8 minimum
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 27 Jun 2022 08:23:46 -0300
+
+cockpit-45drives-hardware (2.1.2-1focal) focal; urgency=medium
+
+  * Re-wrote all cockpit modules using VueJS framework
+  * all modules now feature a dark mode
+  * all modules are now better suited for use on mobile
+  * 45drives-disks will now highlight and animate zpools, and vdevs when using zfs
+  * Improved error handling for unknown hardware configurations
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 03 Jun 2022 11:08:40 -0300
+
+cockpit-45drives-hardware (2.1.1-7focal) focal; urgency=medium
+
+  * updated 45drives-tools dependency
+  * added handling for VMs
+  * updated helper scripts for 45drives-system and 45drives-motherboard to play nice
+    with vms
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 17 May 2022 13:39:31 -0300
+
+cockpit-45drives-hardware (2.1.1-6focal) focal; urgency=medium
+
+  * updated guard check for page content
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 12:27:49 -0300
+
+cockpit-45drives-hardware (2.1.1-5focal) focal; urgency=medium
+
+  * updated error handling
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 12:02:59 -0300
+
+cockpit-45drives-hardware (2.1.1-4focal) focal; urgency=medium
+
+  * updated how notifications are sent
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 11:03:47 -0300
+
+cockpit-45drives-hardware (2.1.1-3focal) focal; urgency=medium
+
+  * updated layout of motherboard page
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 10:06:01 -0300
+
+cockpit-45drives-hardware (2.1.1-2focal) focal; urgency=medium
+
+  * redirected stderr in zfs_info
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 09:35:39 -0300
+
+cockpit-45drives-hardware (2.1.1-1focal) focal; urgency=medium
+
+  * updated 45Drives-Motherboard, 45Drives-Disks and 45Drives-System modules using
+    VueJS
+  * Added dark mode for all modules
+  * Disks module will now highlight and animate zpools, vdevs and devices
+  * Updated all modules to work on mobile
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 08:34:54 -0300
+
+cockpit-45drives-hardware (2.1.0-13focal) focal; urgency=medium
+
+  * updated zfs_info script
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 16 May 2022 08:15:18 -0300
+
+cockpit-45drives-hardware (2.1.0-12focal) focal; urgency=medium
+
+  * added notifications
+
+ -- Mark Hooper <mhooper@45drives.com>  Thu, 12 May 2022 06:11:25 -0300
+
+cockpit-45drives-hardware (2.1.0-11focal) focal; urgency=medium
+
+  * updated build number manually
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 10 May 2022 09:59:59 -0300
+
+cockpit-45drives-hardware (2.1.0-10focal) focal; urgency=medium
+
+  * updated makefile
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 10 May 2022 08:29:04 -0300
+
+cockpit-45drives-hardware (2.1.0-9focal) focal; urgency=medium
+
+  * updated makefile
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 10 May 2022 08:00:01 -0300
+
+cockpit-45drives-hardware (2.1.0-8focal) focal; urgency=medium
+
+  * updated makefile because the ubuntu container uses dash as its default shell
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 10 May 2022 07:42:08 -0300
+
+cockpit-45drives-hardware (2.1.0-7focal) focal; urgency=medium
+
+  * 8th build
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 10 May 2022 07:04:18 -0300
+
+cockpit-45drives-hardware (2.1.0-6focal) focal; urgency=medium
+
+  * 6th build, added more flags
+  * 7th build, passed a --no-parallel flag to dh make because yarn is trash
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 12:59:27 -0300
+
+cockpit-45drives-hardware (2.1.0-5focal) focal; urgency=medium
+
+  * 5th build, added network concurrency flag to make file
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 12:39:37 -0300
+
+cockpit-45drives-hardware (2.1.0-4focal) focal; urgency=medium
+
+  * fourth build, tried initializing with a yarn.lock file in each subdir
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 12:33:03 -0300
+
+cockpit-45drives-hardware (2.1.0-3focal) focal; urgency=medium
+
+  * third build
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 11:14:11 -0300
+
+cockpit-45drives-hardware (2.1.0-2focal) focal; urgency=medium
+
+  * second build using autopackaging
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 10:12:59 -0300
+
+cockpit-45drives-hardware (2.1.0-1focal) focal; urgency=medium
+
+  * first build of cockpit-45drives-hardware using vue.js
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 09 May 2022 10:03:59 -0300
+
+cockpit-45drives-hardware (2.0.3-2focal) focal; urgency=medium
+
+  * releasing 2.0.3-2 on 45drives stable repo
+  * added support for 2U Stornado
+  * added disk images for Toshiba HDDs, Seagate Nytro SAS and Micron 5300 ssds
+  * Updated H11SSL-i motherboard background assets
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 23 Feb 2022 06:51:56 -0400
+
+cockpit-45drives-hardware (2.0.3-1focal) focal; urgency=medium
+
+  * Added support for 2U Stornado
+  * Added disk images for Toshiba HDDs, Seagate Nytro SAS and Micron 5300 drives.
+  * updated H11SSL-i motherboard background assets
+
+ -- Mark Hooper <mhooper@45drives.com>  Wed, 16 Feb 2022 10:08:52 -0400
+
+cockpit-45drives-hardware (2.0.2-3focal) focal; urgency=medium
+
+  * fixed bug in disks module causing 16th drive in hybrid 16 rows to not be displayed
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 10 Dec 2021 06:55:12 -0400
+
+cockpit-45drives-hardware (2.0.2-2focal) focal; urgency=medium
+
+  * updated helper scripts for 45drives-system and 45drives-motherboard to play nice
+    with vms
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 16 Nov 2021 10:52:17 -0400
+
+cockpit-45drives-hardware (2.0.2-1focal) focal; urgency=medium
+
+  * added support for X11SPi-TF Motherboards in 45drives-motherboard module
+  * updated assets for X11SPL-F Motherboard
+  * modified how detected ram is displayed in 45drives-motherboard module
+
+ -- Mark Hooper <mhooper@45drives.com>  Tue, 16 Nov 2021 06:38:29 -0400
+
+cockpit-45drives-hardware (2.0.1-5focal) focal; urgency=medium
+
+  * added ipmi lan info section to 45Drives-system module
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 14:18:53 -0300
+
+cockpit-45drives-hardware (2.0.1-4focal) focal; urgency=medium
+
+  * updated unsupported motherboard message in 45Drives-motherboard module
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 12:51:06 -0300
+
+cockpit-45drives-hardware (2.0.1-3focal) focal; urgency=medium
+
+  * updated helper scripts to handle virtual machine hardware configurations
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 12:42:01 -0300
+
+cockpit-45drives-hardware (2.0.1-2focal) focal; urgency=medium
+
+  * updated CSS for 45Drives Disks
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 10:18:39 -0300
+
+cockpit-45drives-hardware (2.0.1-1focal) focal; urgency=medium
+
+  * added new product keys for Bronze, Silver and Gold Intel CPUs using X11SPL-F
+    Motherboards
+  * added a placeholder image to 45Drives-system page
+  * Mouseover popups on motherboard no longer extend below board footprint
+  * Added Package for Rocky Linux
+  * updated README.md
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 09:40:59 -0300
+
+cockpit-45drives-hardware (2.0.0-5focal) focal; urgency=medium
+
+  * updated images used in 45drives-system page
+
+ -- Mark Hooper <mhooper@45drives.com>  Mon, 23 Aug 2021 06:02:17 -0300
+
+cockpit-45drives-hardware (2.0.0-4focal) focal; urgency=medium
+
+  * build 3, added require el7 folder
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 20 Aug 2021 07:07:36 -0300
+
+cockpit-45drives-hardware (2.0.0-3focal) focal; urgency=medium
+
+  * second build, changed deb dependencies format for >= style entry
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 20 Aug 2021 07:02:48 -0300
+
+cockpit-45drives-hardware (2.0.0-2focal) focal; urgency=medium
+
+  * first build using autopackaging
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 20 Aug 2021 06:58:20 -0300
+
+cockpit-45drives-hardware (2.0.0-1focal) focal; urgency=medium
+
+  * added auto packaging for Ubuntu, Rocky and CentOS7
+
+ -- Mark Hooper <mhooper@45drives.com>  Fri, 20 Aug 2021 06:54:11 -0300

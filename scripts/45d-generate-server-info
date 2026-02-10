@@ -1,0 +1,259 @@
+#!/usr/bin/php
+<?php
+$output_dir = getenv('DRIVEMAP_OUTPUT_DIR') ?: '/var/local/45d';
+$output_file = getenv('DRIVEMAP_SERVER_INFO_OUTPUT') ?: ($output_dir . '/server_info.json');
+$source_file = getenv('DRIVEMAP_SERVER_INFO_INPUT') ?: '/etc/45drives/server_info/server_info.json';
+$vendor_server_identifier = getenv('DRIVEMAP_VENDOR_SERVER_IDENTIFIER') ?: '/opt/45drives/tools/server_identifier';
+$alias_file = getenv('DRIVEMAP_ALIAS_FILE') ?: '/etc/vdev_id.conf';
+$force_model = getenv('DRIVEMAP_SERVER_MODEL') ?: '';
+$force_chassis = getenv('DRIVEMAP_CHASSIS_SIZE') ?: '';
+$force_alias = getenv('DRIVEMAP_ALIAS_STYLE') ?: '';
+$force_serial = getenv('DRIVEMAP_SERVER_SERIAL') ?: '';
+$force_prefix = getenv('DRIVEMAP_SERVER_PREFIX') ?: '';
+$log_file = getenv('DRIVEMAP_LOG_FILE') ?: ($output_dir . '/drivemap.log');
+
+@mkdir($output_dir, 0755, true);
+
+function log_line($path, $message)
+{
+  @file_put_contents($path, gmdate('c') . " " . $message . "\n", FILE_APPEND);
+}
+
+function read_first_value($paths)
+{
+  foreach ($paths as $path) {
+    if (is_file($path)) {
+      $value = trim((string)@file_get_contents($path));
+      if ($value !== '' && $value !== 'None') {
+        return $value;
+      }
+    }
+  }
+  return '';
+}
+
+function alias_templates()
+{
+  return [
+    'H16' => [
+      'AV15' => [23],
+      'Q30' => [15, 23],
+      'S45' => [15, 15, 23],
+      'XL60' => [15, 15, 15, 23],
+    ],
+    'H32' => [
+      'Q30' => [15, 32],
+      'S45' => [15, 15, 32],
+      'XL60' => [15, 15, 15, 32],
+    ],
+    'STORINATOR' => [
+      'AV15' => [15],
+      'Q30' => [15, 15],
+      'S45' => [15, 15, 15],
+      'XL60' => [15, 15, 15, 15],
+      'C8' => [4, 4],
+      'MI4' => [4],
+    ],
+    'HOMELAB' => [
+      'HL4' => [4],
+      'HL8' => [4, 4],
+      'HL15' => [15],
+      'HL15_BEAST' => [23],
+    ],
+    'PROFESSIONAL' => [
+      'PRO4' => [4],
+      'PRO8' => [4, 4],
+      'PRO15' => [15],
+    ],
+    'F8' => [
+      'F8X1' => [20],
+      'F8X2' => [20, 20],
+      'F8X3' => [20, 20, 20],
+    ],
+    'STUDIO' => [
+      'STUDIO8' => [4, 4],
+    ],
+    'BYPATH' => [
+      'VM2' => [2],
+    ],
+  ];
+}
+
+function alias_summary($alias_file)
+{
+  if (!is_file($alias_file)) {
+    return ['rows' => [], 'total' => 0];
+  }
+  $lines = file($alias_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  if (!is_array($lines)) {
+    return ['rows' => [], 'total' => 0];
+  }
+
+  $counts = [];
+  $total = 0;
+  foreach ($lines as $line) {
+    $line = trim($line);
+    if ($line === '' || strpos($line, '#') === 0) {
+      continue;
+    }
+    if (preg_match('/^alias\s+(\d+)-(\d+)\s+(\S+)/', $line, $matches)) {
+      $card = (int)$matches[1];
+      if (!isset($counts[$card])) {
+        $counts[$card] = 0;
+      }
+      $counts[$card]++;
+      $total++;
+    }
+  }
+  ksort($counts);
+  return ['rows' => array_values($counts), 'total' => $total];
+}
+
+function prefix_hint($prefix)
+{
+  $prefix = strtolower($prefix);
+  if ($prefix === 'homelab') {
+    return 'HOMELAB';
+  }
+  if ($prefix === 'professional') {
+    return 'PROFESSIONAL';
+  }
+  if ($prefix === 'studio') {
+    return 'STUDIO';
+  }
+  return '';
+}
+
+function infer_layout_from_aliases($alias_file, $prefix)
+{
+  $summary = alias_summary($alias_file);
+  $rows = $summary['rows'];
+  $total = $summary['total'];
+  if (!$rows) {
+    return ['style' => '', 'chassis' => ''];
+  }
+
+  $templates = alias_templates();
+  $candidates = [];
+  foreach ($templates as $style => $chassis_map) {
+    foreach ($chassis_map as $chassis => $lengths) {
+      if ($lengths === $rows) {
+        $candidates[] = ['style' => $style, 'chassis' => $chassis];
+      }
+    }
+  }
+
+  if ($candidates) {
+    $hint = prefix_hint($prefix);
+    if ($hint !== '') {
+      foreach ($candidates as $candidate) {
+        if ($candidate['style'] === $hint) {
+          return $candidate;
+        }
+      }
+    }
+    foreach ($candidates as $candidate) {
+      if ($candidate['style'] === 'STORINATOR') {
+        return $candidate;
+      }
+    }
+    return $candidates[0];
+  }
+
+  $simple_map = [
+    2 => ['BYPATH', 'VM2'],
+    8 => ['F8', 'F8X1'],
+    15 => ['STORINATOR', 'AV15'],
+    16 => ['STORINATOR', 'Q30'],
+    20 => ['F8', 'F8X1'],
+    23 => ['H16', 'AV15'],
+    30 => ['STORINATOR', 'Q30'],
+    32 => ['H32', 'Q30'],
+    45 => ['STORINATOR', 'S45'],
+    60 => ['STORINATOR', 'XL60'],
+  ];
+  if (isset($simple_map[$total])) {
+    return ['style' => $simple_map[$total][0], 'chassis' => $simple_map[$total][1]];
+  }
+
+  return ['style' => '', 'chassis' => ''];
+}
+
+function infer_prefix($product_name)
+{
+  $product_name = strtolower($product_name);
+  $prefixes = [
+    'stornado' => 'Stornado',
+    'proxinator' => 'Proxinator',
+    'destroyinator' => 'Destroyinator',
+    'homelab' => 'HomeLab',
+    'professional' => 'Professional',
+    'studio' => 'Studio',
+  ];
+  foreach ($prefixes as $needle => $prefix) {
+    if (strpos($product_name, $needle) !== false) {
+      return $prefix;
+    }
+  }
+  return 'Storinator';
+}
+
+function model_from_parts($prefix, $style, $chassis)
+{
+  if ($chassis === '' || $chassis === '?') {
+    return $prefix;
+  }
+  if ($style === 'H16' || $style === 'H32') {
+    return $prefix . '-' . $style . '-' . $chassis;
+  }
+  return $prefix . '-' . $chassis;
+}
+
+if (is_file($source_file)) {
+  @copy($source_file, $output_file);
+  log_line($log_file, 'server_info copied from ' . $source_file);
+  exit(0);
+}
+
+$vendor_output = [];
+$vendor_code = 0;
+if (is_executable($vendor_server_identifier)) {
+  exec(escapeshellarg($vendor_server_identifier) . ' 2>&1', $vendor_output, $vendor_code);
+  if ($vendor_code === 0 && is_file($source_file)) {
+    @copy($source_file, $output_file);
+    log_line($log_file, 'server_info copied after server_identifier run');
+    exit(0);
+  }
+  if ($vendor_output) {
+    log_line($log_file, 'server_identifier output: ' . implode(' | ', $vendor_output));
+  }
+}
+
+$product_name = read_first_value([
+  '/sys/class/dmi/id/product_name',
+  '/sys/class/dmi/id/board_name',
+]);
+$serial = $force_serial !== '' ? $force_serial : read_first_value([
+  '/sys/class/dmi/id/product_serial',
+  '/sys/class/dmi/id/chassis_serial',
+  '/sys/class/dmi/id/board_serial',
+]);
+$prefix = $force_prefix !== '' ? $force_prefix : infer_prefix($product_name);
+$layout = infer_layout_from_aliases($alias_file, $prefix);
+
+$chassis = $force_chassis !== '' ? $force_chassis : ($layout['chassis'] !== '' ? $layout['chassis'] : '?');
+$alias_style = $force_alias !== '' ? strtoupper($force_alias) : ($layout['style'] !== '' ? $layout['style'] : 'STORINATOR');
+$chassis = strtoupper($chassis);
+
+$model = $force_model !== '' ? $force_model : model_from_parts($prefix, $alias_style, $chassis);
+
+$server_info = [
+  'Model' => $model !== '' ? $model : '?',
+  'Chassis Size' => $chassis !== '' ? $chassis : '?',
+  'Alias Style' => $alias_style !== '' ? $alias_style : '?',
+  'Serial' => $serial !== '' ? $serial : '?',
+  'HBA' => [],
+];
+
+file_put_contents($output_file, json_encode($server_info, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+log_line($log_file, 'server_info generated');

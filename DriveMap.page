@@ -1,0 +1,38 @@
+Menu="Main:6"
+Title="Drive Map"
+Tag="th"
+---
+<?PHP
+$plugin = '45d-drivemap';
+$asset_root = "/plugins/$plugin/assets/45d";
+$asset_base = "$asset_root/45drives-disks";
+$api_base = "/plugins/$plugin/php/api.php";
+$embedded_fs = "/usr/local/emhttp/plugins/$plugin/assets/45d/45drives-disks/index.html";
+$use_embedded = is_file($embedded_fs);
+?>
+<?if ($use_embedded):?>
+  <style>
+  #drivemap-frame {
+    width: 100%;
+    height: 80vh;
+    min-height: 720px;
+    border: 0;
+  }
+  </style>
+  <iframe id="drivemap-frame" title="45D Drive Map" src="<?=$asset_base?>/index.html"></iframe>
+<?else:?>
+  <link rel="stylesheet" href="<?=$asset_root?>/drivemap.css">
+  <div id="drive-map-app" class="drivemap" data-api="<?=$api_base?>" data-asset-base="<?=$asset_root?>">
+    <div class="drivemap-toolbar">
+      <div class="drivemap-title">45D Drive Map</div>
+      <div class="drivemap-meta">
+        <span id="drivemap-status">Loading map...</span>
+        <input id="drivemap-refresh" type="button" value="Refresh">
+      </div>
+    </div>
+    <div id="drivemap-error" class="drivemap-error" style="display:none;"></div>
+    <div id="drivemap-canvas" class="drivemap-canvas"></div>
+    <div id="drivemap-details" class="drivemap-details">Select a bay to see drive details.</div>
+  </div>
+  <script src="<?=$asset_root?>/drivemap.js"></script>
+<?endif;?>

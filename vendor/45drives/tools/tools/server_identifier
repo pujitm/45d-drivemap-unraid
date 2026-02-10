@@ -1,0 +1,1262 @@
+#!/usr/bin/env python3
+########################################################################################
+# server_identifier
+# This script can be run on standard 45Drives storage servers to determine the system 
+# model by gathering hardware information.
+########################################################################################
+import subprocess
+import re
+import json
+import os.path
+import os
+from datetime import datetime
+import sys
+import shlex
+import glob
+import configparser
+
+g_product_lut_idx = {
+	"MOBO_MODEL":	0,
+	"24I_COUNT":	1,
+	"16I_COUNT":	2,
+	"CHASSIS_SIZE": 3,
+	"ALIAS_STYLE":	4
+}
+
+g_chassis_sizes = ["?","AV15","Q30","S45","XL60","F8X1","F8X2","F8X3","2U","2UGW","1UGW","F2","HL15","VM8","VM16","VM32","HL4","HL8","PRO4","PRO8","PRO15","STUDIO8","HL15_BEAST","F16","VM2"]
+
+g_mobo_to_version_lut = {
+	"Base": ["X11SSH-CTF","X11SSM-F","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Base-B": ["X11SPL-F","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Enhanced": ["X11SPL-F","X10SRL-F","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Enhanced-S":["X11SPL-F","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Enhanced-AMD":["H11SSL-i","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Turbo": ["X11DPL-i","X10DRL-i","X12DPi-N6","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Turbo-G":["X11SPL-F","X12DPi-N6","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Good": ["H12SSL-i","H12SSL-I","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Better": ["H12SSL-i","H12SSL-I","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+	"Best": ["H12SSL-i","H12SSL-I","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"],
+ 	"Super": ["H12SSL-i","H12SSL-I","ME03-CE0-000","MS03-6L0-000","MS73-HB0-000","MZ73-LM0-000","MC13-LE1-000","B550I AORUS PRO","EC266D2I-2T/AQC","ROMED8-2T/BCM","ROMED8-2T", "ProArt X870E-CREATOR WIFI"]
+}
+
+g_product_lut = {
+	"Gateway-2UGW-Base":				[g_mobo_to_version_lut["Base"],0,0,"2UGW","2UGW"],
+	"Gateway-2UGW-Base-B":				[g_mobo_to_version_lut["Base"],0,0,"2UGW","2UGW"],
+	"Gateway-2UGW-Enhanced":			[g_mobo_to_version_lut["Enhanced"],0,0,"2UGW","2UGW"],
+	"Gateway-2UGW-Enhanced-S":			[g_mobo_to_version_lut["Enhanced"],0,0,"2UGW","2UGW"],
+	"Gateway-2UGW-Turbo-G":				[g_mobo_to_version_lut["Turbo"],0,0,"2UGW","2UGW"],
+ 
+ 	"Gateway-1UGW-Base":				[g_mobo_to_version_lut["Base"],0,0,"1UGW","1UGW"],
+	"Gateway-1UGW-Base-B":				[g_mobo_to_version_lut["Base"],0,0,"1UGW","1UGW"],
+	"Gateway-1UGW-Enhanced":			[g_mobo_to_version_lut["Enhanced"],0,0,"1UGW","1UGW"],
+	"Gateway-1UGW-Enhanced-S":			[g_mobo_to_version_lut["Enhanced"],0,0,"1UGW","1UGW"],
+	"Gateway-1UGW-Turbo-G":				[g_mobo_to_version_lut["Turbo"],0,0,"1UGW","1UGW"],
+ 
+  	"Compute-1UGW-Base":				[g_mobo_to_version_lut["Base"],0,0,"1UGW","1UGW"],
+	"Compute-1UGW-Enhanced":			[g_mobo_to_version_lut["Enhanced"],0,0,"1UGW","1UGW"],
+	"Compute-1UGW-Turbo":				[g_mobo_to_version_lut["Turbo"],0,0,"1UGW","1UGW"],
+	"Compute-1UGW-Super":				[g_mobo_to_version_lut["Super"],0,0,"1UGW","1UGW"],
+
+	"HomeLab-HL15_BEAST":               [g_mobo_to_version_lut["Turbo"],1,0,"HL15_BEAST","HOMELAB"],
+	"HomeLab-HL15":                     [g_mobo_to_version_lut["Turbo"],0,0,"HL15","HOMELAB"],
+	"HomeLab-HL4":             			[g_mobo_to_version_lut["Turbo"],0,0,"HL4","HOMELAB"],
+	"HomeLab-HL8":             			[g_mobo_to_version_lut["Turbo"],0,0,"HL8","HOMELAB"],
+ 
+ 	"Professional-PRO15":               [g_mobo_to_version_lut["Turbo"],0,1,"PRO15","PROFESSIONAL"],
+	"Professional-PRO4":             	[g_mobo_to_version_lut["Turbo"],0,0,"PRO4","PROFESSIONAL"],
+	"Professional-PRO8":             	[g_mobo_to_version_lut["Turbo"],0,0,"PRO8","PROFESSIONAL"],
+
+	"Storinator-AV15-Base":				[g_mobo_to_version_lut["Base"],0,0,"AV15","AV15-BASE"],
+	"Storinator-AV15-Base-B":			[g_mobo_to_version_lut["Base-B"],0,1,"AV15","STORINATOR"],
+	"Storinator-AV15-Enhanced":			[g_mobo_to_version_lut["Enhanced"],0,1,"AV15","STORINATOR"],
+	"Storinator-AV15-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"],0,1,"AV15","STORINATOR"],
+	"Storinator-AV15-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"],0,1,"AV15","STORINATOR"],
+	"Storinator-AV15-Turbo":			[g_mobo_to_version_lut["Turbo"],0,1,"AV15","STORINATOR"],
+	"Storinator-AV15-Turbo-G":		    [g_mobo_to_version_lut["Turbo-G"],0,1,"AV15","STORINATOR"],
+
+	"Storinator-C8-Base":				[g_mobo_to_version_lut["Base"],0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Base-B":				[g_mobo_to_version_lut["Base-B"],0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Enhanced":			[g_mobo_to_version_lut["Enhanced"],0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Enhanced-S":			[g_mobo_to_version_lut["Enhanced-S"]  ,0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,1,"C8"  ,"STORINATOR"],
+	"Storinator-C8-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,1,"C8"  ,"STORINATOR"],
+
+	"Storinator-C8_UBM-Base":			[g_mobo_to_version_lut["Base"],0,1,"C8_UBM"  ,"STORINATORUBM"],
+	"Storinator-C8_UBM-Enhanced":		[g_mobo_to_version_lut["Enhanced"],0,1,"C8_UBM"  ,"STORINATORUBM"],
+	"Storinator-C8_UBM-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,1,"C8_UBM"  ,"STORINATORUBM"],
+
+	"Storinator-F8X1-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Base":				[g_mobo_to_version_lut["Base"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,1,0,"F8X1","F8"],
+	"Storinator-F8X1-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,1,0,"F8X1","F8"],
+
+	"Storinator-F8X2-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Base":				[g_mobo_to_version_lut["Base"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,2,0,"F8X1","F8"],
+	"Storinator-F8X2-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,2,0,"F8X1","F8"],
+
+	"Storinator-F8X3-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Base":				[g_mobo_to_version_lut["Base"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,3,0,"F8X1","F8"],
+	"Storinator-F8X3-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,3,0,"F8X1","F8"],
+	
+	"Storinator-H8-AV15-Base-B":		[g_mobo_to_version_lut["Base-B"]  ,0,1,"AV15","STORINATOR"],
+	"Storinator-H8-AV15-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,1,"AV15","STORINATOR"],
+	"Storinator-H8-AV15-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,0,1,"AV15","STORINATOR"],
+	"Storinator-H8-AV15-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,1,"AV15","STORINATOR"],
+	"Storinator-H8-AV15-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,1,"AV15","STORINATOR"],
+	"Storinator-H8-AV15-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,0,1,"AV15","STORINATOR"],
+
+	"Storinator-H8-Q30-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Base":			[g_mobo_to_version_lut["Base"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,2,"Q30","STORINATOR"],
+	"Storinator-H8-Q30-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,0,2,"Q30","STORINATOR"],
+
+	"Storinator-H8-S45-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Base":			[g_mobo_to_version_lut["Base"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,3,"S45","STORINATOR"],
+	"Storinator-H8-S45-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,0,3,"S45","STORINATOR"],
+
+	"Storinator-H8-XL60-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-H8-XL60-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-H8-XL60-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-H8-XL60-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-H8-XL60-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,0,4,"XL60","STORINATOR"],
+
+	"Storinator-H16-AV15-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,1,0,"AV15" ,"H16"],
+	"Storinator-H16-AV15-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,1,0,"AV15" ,"H16"],
+	"Storinator-H16-AV15-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,0,"AV15" ,"H16"],
+	"Storinator-H16-AV15-Turbo":		[g_mobo_to_version_lut["Turbo"]  ,1,0,"AV15" ,"H16"],
+	"Storinator-H16-AV15-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,1,0,"AV15" ,"H16"],
+
+	"Storinator-H16-AV15-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,0,"AV15" ,"H16"],
+	"Storinator-H16-Q30-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,1,1,"Q30" ,"H16"],
+	"Storinator-H16-Q30-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,1,1,"Q30" ,"H16"],
+	"Storinator-H16-Q30-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,1,"Q30" ,"H16"],
+	"Storinator-H16-Q30-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,1,1,"Q30" ,"H16"],
+	"Storinator-H16-Q30-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,1,1,"Q30" ,"H16"],
+	"Storinator-H16-S45-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,1,2,"S45" ,"H16"],
+	"Storinator-H16-S45-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,1,2,"S45" ,"H16"],
+	"Storinator-H16-S45-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,2,"S45" ,"H16"],
+	"Storinator-H16-S45-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,1,2,"S45" ,"H16"],
+	"Storinator-H16-S45-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,1,2,"S45" ,"H16"],
+	"Storinator-H16-XL60-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,1,3,"XL60","H16"],
+	"Storinator-H16-XL60-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,1,3,"XL60","H16"],
+	"Storinator-H16-XL60-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,1,3,"XL60","H16"],
+	"Storinator-H16-XL60-Turbo":		[g_mobo_to_version_lut["Turbo"]  ,1,3,"XL60","H16"],
+	"Storinator-H16-XL60-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,1,3,"XL60","H16"],
+
+	"Storinator-H32-Q30-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,2,0,"Q30" ,"H32"],
+	"Storinator-H32-Q30-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,2,0,"Q30" ,"H32"],
+	"Storinator-H32-Q30-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,2,0,"Q30" ,"H32"],
+	"Storinator-H32-Q30-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,2,0,"Q30" ,"H32"],
+	"Storinator-H32-Q30-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,2,0,"Q30" ,"H32"],
+	"Storinator-H32-S45-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,2,1,"S45" ,"H32"],
+	"Storinator-H32-S45-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,2,1,"S45" ,"H32"],
+	"Storinator-H32-S45-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,2,1,"S45" ,"H32"],
+	"Storinator-H32-S45-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,2,1,"S45" ,"H32"],
+	"Storinator-H32-S45-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,2,1,"S45" ,"H32"],
+	"Storinator-H32-XL60-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,2,2,"XL60","H32"],
+	"Storinator-H32-XL60-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,2,2,"XL60","H32"],
+	"Storinator-H32-XL60-Enhanced-AMD":	[g_mobo_to_version_lut["Enhanced-AMD"]  ,2,2,"XL60","H32"],
+	"Storinator-H32-XL60-Turbo":		[g_mobo_to_version_lut["Turbo"]  ,2,2,"XL60","H32"],
+	"Storinator-H32-XL60-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"]  ,2,2,"XL60","H32"],
+
+	"Storinator-MI4-Base":				[g_mobo_to_version_lut["Base"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,0,"MI4"  ,"STORINATOR"],
+	"Storinator-MI4-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,0,"MI4"  ,"STORINATOR"],
+
+	"Storinator-MI4_UBM-Base":			[g_mobo_to_version_lut["Base"]  ,0,0,"MI4_UBM"  ,"STORINATORUBM"],
+	"Storinator-MI4_UBM-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,0,"MI4_UBM"  ,"STORINATORUBM"],
+	"Storinator-MI4_UBM-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,0,"MI4_UBM"  ,"STORINATORUBM"],
+
+	"Storinator-Q30-Base":				[g_mobo_to_version_lut["Base"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,2,"Q30" ,"STORINATOR"],
+	"Storinator-Q30-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,2,"Q30" ,"STORINATOR"],
+
+	"Storinator-S45-Base":				[g_mobo_to_version_lut["Base"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Base-B":			[g_mobo_to_version_lut["Base-B"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,3,"S45" ,"STORINATOR"],
+	"Storinator-S45-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,3,"S45" ,"STORINATOR"],
+
+	"Storinator-XL60-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-XL60-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-XL60-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-XL60-Turbo":			[g_mobo_to_version_lut["Turbo"]  ,0,4,"XL60","STORINATOR"],
+	"Storinator-XL60-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,4,"XL60","STORINATOR"],
+
+	"Stornado-AV15-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,2,"AV15","STORNADO"],
+	"Stornado-AV15-Enhanced-S":			[g_mobo_to_version_lut["Enhanced-S"]  ,0,2,"AV15","STORNADO"],
+	"Stornado-AV15-Enhanced-AMD":		[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,2,"AV15","STORNADO"],
+	"Stornado-AV15-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,2,"AV15","STORNADO"],
+	"Stornado-AV15-Turbo-G":			[g_mobo_to_version_lut["Turbo-G"]  ,0,2,"AV15","STORNADO"],
+
+	"Stornado-2U-Base-B":				[g_mobo_to_version_lut["Base-B"]  ,0,2,"2U","2USTORNADO"],
+	"Stornado-2U-Enhanced-AMD":			[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,2,"2U","2USTORNADO"],
+	"Stornado-2U-Enhanced-S":			[g_mobo_to_version_lut["Enhanced-S"]  ,0,2,"2U","2USTORNADO"],
+	"Stornado-2U-Turbo-G":				[g_mobo_to_version_lut["Turbo-G"]  ,0,2,"2U","2USTORNADO"],
+	"Stornado-2U-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,2,"2U","2USTORNADO"],
+
+	"Stornado-F2-Base-B":				[g_mobo_to_version_lut["Base-B"]  ,0,4,"F2","F2STORNADO"],
+	"Stornado-F2-Enhanced-AMD":			[g_mobo_to_version_lut["Enhanced-AMD"]  ,0,4,"F2","F2STORNADO"],
+	"Stornado-F2-Enhanced-S":			[g_mobo_to_version_lut["Enhanced-S"]  ,0,4,"F2","F2STORNADO"],
+	"Stornado-F2-Turbo-G":				[g_mobo_to_version_lut["Turbo-G"]  ,0,4,"F2","F2STORNADO"],
+	"Stornado-F2-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,4,"F2","F2STORNADO"],
+
+	"Stornado-F16-Base":				[g_mobo_to_version_lut["Base"]  ,0,4,"F16","F2STORNADO"],
+	"Stornado-F16-Enhanced":			[g_mobo_to_version_lut["Enhanced"]  ,0,4,"F16","F2STORNADO"],
+	"Stornado-F16-Turbo":				[g_mobo_to_version_lut["Turbo"]  ,0,4,"F16","F2STORNADO"],
+
+	"Proxinator-VM8-Base":				[g_mobo_to_version_lut["Good"]  ,0,1,"VM8","F2STORNADO"],
+	"Proxinator-VM8-Enhanced":			[g_mobo_to_version_lut["Better"]  ,0,1,"VM8","F2STORNADO"],
+	"Proxinator-VM8-Turbo":				[g_mobo_to_version_lut["Best"]  ,0,1,"VM8","F2STORNADO"],
+
+	"Proxinator-VM8-15mm-Base":			[g_mobo_to_version_lut["Base"]  ,0,2,"VM8","F2STORNADO"],
+	"Proxinator-VM8-15mm-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,2,"VM8","F2STORNADO"],
+	"Proxinator-VM8-15mm-Turbo":		[g_mobo_to_version_lut["Turbo"]  ,0,2,"VM8","F2STORNADO"],
+
+	"Proxinator-VM4-15mm-Base":			[g_mobo_to_version_lut["Base"]  ,0,1,"VM4","F2STORNADO"],
+	"Proxinator-VM4-15mm-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,1,"VM4","F2STORNADO"],
+	"Proxinator-VM4-15mm-Turbo":		[g_mobo_to_version_lut["Turbo"]  ,0,1,"VM4","F2STORNADO"],
+
+	"Proxinator-VM16-Base":				[g_mobo_to_version_lut["Good"]  ,0,2,"VM16","F2STORNADO"],
+	"Proxinator-VM16-Enhanced":			[g_mobo_to_version_lut["Better"]  ,0,2,"VM16","F2STORNADO"],
+	"Proxinator-VM16-Turbo":			[g_mobo_to_version_lut["Best"]  ,0,2,"VM16","F2STORNADO"],
+
+	"Proxinator-VM32-Base":				[g_mobo_to_version_lut["Good"]  ,0,4,"VM32","F2STORNADO"],
+	"Proxinator-VM32-Enhanced":			[g_mobo_to_version_lut["Better"]  ,0,4,"VM32","F2STORNADO"],
+	"Proxinator-VM32-Turbo":			[g_mobo_to_version_lut["Best"]  ,0,4,"VM32","F2STORNADO"],
+
+	"Proxinator-VM2-Base":				[g_mobo_to_version_lut["Good"]  ,0,0,"VM2","BYPATH"],
+	"Proxinator-VM2-Enhanced":			[g_mobo_to_version_lut["Better"]  ,0,0,"VM2","BYPATH"],
+	"Proxinator-VM2-Turbo":				[g_mobo_to_version_lut["Best"]  ,0,0,"VM2","BYPATH"],
+
+	"Destroyinator-AV15-Enhanced":		[g_mobo_to_version_lut["Enhanced"],0,1,"AV15","DESTROYINATOR"],
+	"Destroyinator-AV15-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"],0,1,"AV15","DESTROYINATOR"],
+	"Destroyinator-Q30-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,2,"Q30","DESTROYINATOR"],
+	"Destroyinator-Q30-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,2,"Q30","DESTROYINATOR"],
+	"Destroyinator-S45-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,3,"S45","DESTROYINATOR"],
+	"Destroyinator-S45-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"]  ,0,3,"S45","DESTROYINATOR"],
+	"Destroyinator-XL60-Enhanced":		[g_mobo_to_version_lut["Enhanced"]  ,0,4,"XL60","DESTROYINATOR"],
+	"Destroyinator-XL60-Enhanced-S":	[g_mobo_to_version_lut["Enhanced-S"]  ,0,4,"XL60","DESTROYINATOR"],
+
+ 	"Destroyinator-F16-Enhanced":		[g_mobo_to_version_lut["Enhanced"],0,4,"F16","F2STORNADO"],
+	"Destroyinator-F16-Enhanced-S":		[g_mobo_to_version_lut["Enhanced-S"],0,4,"F16","F2STORNADO"],
+	"Destroyinator-F16-Turbo":			[g_mobo_to_version_lut["Turbo"],0,4,"F16","F2STORNADO"],
+	"Destroyinator-F16-Turbo-G":		[g_mobo_to_version_lut["Turbo-G"],0,4,"F16","F2STORNADO"],
+ 
+	"Studio-STUDIO8":             		[g_mobo_to_version_lut["Turbo"],0,0,"STUDIO8","STUDIO"],
+
+	"Storinator-AV15-VM":				[["VIRTUAL_MACHINE"],0,1,"AV15","STORINATOR"],
+	"Storinator-Q30-VM":				[["VIRTUAL_MACHINE"],0,2,"Q30","STORINATOR"],
+	"Storinator-S45-VM":				[["VIRTUAL_MACHINE"],0,3,"S45","STORINATOR"],
+	"Storinator-XL60-VM":				[["VIRTUAL_MACHINE"],0,4,"XL60","STORINATOR"],
+
+	"Storinator":						[["?"],0,0,"?","STORINATOR"],
+	"?":								[["?"],0,0,"?","?"]
+}
+
+def _safe_parse_int(s):
+    """Return int(s) if possible, else 0."""
+    try:
+        return int(str(s).strip().strip('"').strip("'"))
+    except Exception:
+        return 0
+
+def _run_and_get_stdout(cmd, timeout=8):
+    """
+    Run a command (shell=True) and return combined stdout/stderr as text.
+    On error/timeout, return empty string.
+    """
+    try:
+        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out, _ = p.communicate(timeout=timeout)
+        return (out or b"").decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def read_latest_fru_ini(base_dir="/opt/45drives/serial45d/fru_ini"):
+    """
+    Returns dict like {"product": "...", "part": "...", "serial": "...", "ini_path": "..."}
+    from the newest .ini in base_dir, or None if not found/invalid.
+    """
+    try:
+        candidates = sorted(
+            glob.glob(os.path.join(base_dir, "*.ini")),
+            key=os.path.getmtime,
+            reverse=True
+        )
+        for path in candidates:
+            cp = configparser.ConfigParser()
+            cp.read(path)
+
+            if cp.has_section("product"):
+                product = cp.get("product", "product", fallback="").strip()
+                part    = cp.get("product", "part",    fallback="").strip()
+                serial  = cp.get("product", "serial",  fallback="").strip()
+
+                # fall back to [chassis] serial/part if product section is incomplete
+                if not serial and cp.has_section("chassis"):
+                    serial = cp.get("chassis", "serial", fallback="").strip()
+                if not part and cp.has_section("chassis"):
+                    part = cp.get("chassis", "part", fallback="").strip()
+
+                if product:
+                    return {"product": product, "part": part, "serial": serial, "ini_path": path}
+    except Exception:
+        pass
+    return None
+
+
+def motherboard():
+	# search through the output of the command "dmidecode -t 2" for motherboard information
+	# example output:
+		# # dmidecode 3.2
+		# Getting SMBIOS data from sysfs.
+		# SMBIOS 3.2.1 present.
+		# # SMBIOS implementations newer than version 3.2.0 are not
+		# # fully supported by this version of dmidecode.
+		
+		# Handle 0x0002, DMI type 2, 15 bytes
+		# Base Board Information
+		#         Manufacturer: Supermicro
+		#         Product Name: X11SPL-F
+		#         Version: 1.01
+		#         Serial Number: ZM18AS011320
+		#         Asset Tag: To be filled by O.E.M.
+		#         Features:
+		#                 Board is a hosting board
+		#                 Board is replaceable
+		#         Location In Chassis: To be filled by O.E.M.
+		#         Chassis Handle: 0x0003
+		#         Type: Motherboard
+		#         Contained Object Handles: 0
+
+	mobo_dict = {
+	"Manufacturer":"?",
+	"Product Name":"?",
+	"Serial Number":"?"
+	}
+
+	mobo = []
+
+	try:
+		dmi_result = subprocess.Popen(["dmidecode","-t","2"],stdout=subprocess.PIPE,universal_newlines=True).stdout
+	except:
+		print("ERROR: dmidecode is not installed")
+		exit(1)
+	for line in dmi_result:
+		for field in mobo_dict.keys():
+			regex = re.search("^\s+({fld}):\s+(.*)".format(fld=field),line)
+			if regex != None:
+					mobo_dict[regex.group(1)] = regex.group(2)
+
+	try_fru = False
+	for key in mobo_dict.keys():
+		if mobo_dict[key] in ["?",""]:
+			try_fru = True
+
+	if try_fru:
+		try:
+			fru_result = subprocess.Popen(["ipmitool","fru","print","0"],stdout=subprocess.PIPE,universal_newlines=True).stdout
+		except:
+			print("ERROR: ipmitool fru failed to return result.")
+		for line in fru_result:
+			for field in ["Board Mfg", "Board Product", "Board Serial"]:
+				regex = re.search("^\s+({fld})\s+:\s+(.*)".format(fld=field),line)
+				if regex != None:
+					if regex.group(1) == "Board Mfg":
+						mobo_dict["Manufacturer"] = regex.group(2)
+					elif regex.group(1) == "Board Product":
+						mobo_dict["Product Name"] = regex.group(2)
+					elif regex.group(1) == "Board Serial":
+						mobo_dict["Serial Number"] = regex.group(2)
+	return mobo_dict
+
+def getDmidecodePCI(server):
+    try:
+        dmidecode_result = subprocess.Popen(
+            ["dmidecode", "-t", "9"],
+            stdout=subprocess.PIPE,
+            universal_newlines=True
+        ).stdout.read()
+    except:
+        print("ERROR: dmidecode not installed")
+        exit(1)
+
+    pci_slots = []
+    
+    # Match whole slot blocks with Designation and Bus Address
+    rx_slot = re.compile(
+        r"Handle.*?\n(.*?)\n\n",
+        re.DOTALL | re.MULTILINE
+    )
+
+    for slot_block in rx_slot.finditer(dmidecode_result):
+        block = slot_block.group(1)
+        lines = block.strip().splitlines()
+        slot_info = {}
+        for line in lines:
+            line = line.strip()
+            if line.startswith("Designation:"):
+                designation = line.split(":", 1)[1].strip()
+                slot_info["Designation"] = designation
+                slot_number = extract_pci_slot_number(designation)
+                if slot_number:
+                    slot_info["PCI Slot"] = slot_number
+            elif line.startswith("Bus Address:"):
+                slot_info["Bus Address"] = line.split(":", 1)[1].strip()
+        if "Bus Address" in slot_info and "PCI Slot" in slot_info:
+            pci_slots.append(slot_info)
+
+    # Special fixup for EPC621D8A
+    if server.get("Motherboard", {}).get("Product Name") == "EPC621D8A":
+        BA_LUT = {
+            "ff00:16:02.0": "0000:1c:00.0",  # PCIE2
+            "ff00:64:00.0": "0000:65:00.0",  # PCIE4
+            "ff00:64:02.0": "0000:66:00.0",  # PCIE3
+            "ff00:b2:00.0": "0000:b3:00.0",  # PCIE6
+            "ff00:b2:02.0": "0000:b4:00.0",  # PCIE5
+        }
+        for slot in pci_slots:
+            bus = slot.get("Bus Address", "")
+            if bus in BA_LUT:
+                slot["Bus Address"] = BA_LUT[bus]
+
+    return pci_slots
+
+
+def extract_pci_slot_number(designation):
+    """
+    Extracts just the numeric part of a PCIe slot designation.
+
+    Examples:
+    - "PCIE7"     → "7"
+    - "PCIE_7A"   → "7"
+    - "PCIE-8_B"  → "8"
+    - "Slot 23"   → "23"
+    """
+    if not designation:
+        return None
+
+    # Normalize the string (replace dashes/underscores and remove spaces)
+    clean = designation.upper().replace("-", "_").replace(" ", "")
+
+    # Match patterns like PCIE7, PCIE_7A, SLOT23, SLOT_23B, etc.
+    match = re.search(r"(PCIE|SLOT)[_]?(\d+)", clean)
+    if match:
+        return match.group(2)
+
+    return None  # Fallback if no match
+
+
+def getStorcliInfo(hba_card):
+	storcli_path = {
+		"SAS9305-16i":"/opt/45drives/tools/storcli64",
+		"SAS9305-24i":"/opt/45drives/tools/storcli64",
+		"HBA 9405W-16i":"/opt/45drives/tools/storcli64",
+		"HBA 9400-16i":"/opt/45drives/tools/storcli64",
+		"9600-24i":"/opt/45drives/tools/storcli2",
+		"9600-16i":"/opt/45drives/tools/storcli2",
+		"9660-16i":"/opt/45drives/tools/storcli2",
+		"9361-16i":"/opt/45drives/tools/storcli64",
+		"9361-24i":"/opt/45drives/tools/storcli64"
+	}
+
+	jq_version = {
+		"SAS9305-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"SAS9305-24i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"HBA 9405W-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"HBA 9400-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"9600-24i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"9600-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"9660-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"9361-16i": "jq '.Controllers[0].\"Response Data\".\"Version\"'",
+		"9361-24i": "jq '.Controllers[0].\"Response Data\".\"Version\"'"
+	}
+
+	jq_bus_address = {
+		"SAS9305-16i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'",
+		"SAS9305-24i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'",
+		"HBA 9405W-16i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'",
+		"HBA 9400-16i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'",
+		"9600-24i": "jq '.Controllers[0].\"Response Data\".\"HostInterface\"'",
+		"9600-16i": "jq '.Controllers[0].\"Response Data\".\"HostInterface\"'",
+		"9660-16i": "jq '.Controllers[0].\"Response Data\".\"HostInterface\"'",
+		"9361-16i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'",
+		"9361-24i": "jq '.Controllers[0].\"Response Data\".\"Basics\"'"
+	}
+	# if hba_card["Model"] not in storcli_path.keys() or hba_card["Model"] not in storcli_path.keys():
+	# 	print("Unable to proceed with unknown HBA card. {mod}".format(mod=hba_card["Model"]))
+	# 	sys.exit(1)
+	if (
+		hba_card["Model"] not in storcli_path
+		or hba_card["Model"] not in jq_version
+		or hba_card["Model"] not in jq_bus_address
+	):
+		print("Unable to proceed with unknown HBA card. {mod}".format(mod=hba_card["Model"]))
+		sys.exit(1)
+
+	storcli = subprocess.Popen(
+		shlex.split("{pth} /c{ctl} show all J".format(pth=storcli_path[hba_card["Model"]],ctl=hba_card["Ctl"])), stdout=subprocess.PIPE, universal_newlines=True)
+	storcli.wait()
+	jq_version_command = jq_version[hba_card["Model"]]
+	jq_version_process = subprocess.Popen(
+			shlex.split(jq_version_command), stdin=storcli.stdout, stdout=subprocess.PIPE, universal_newlines=True, stderr=subprocess.STDOUT)
+	jq_version_process.wait()
+	jqout_version,_ = jq_version_process.communicate()
+	try:
+		jq_version_json = json.loads(jqout_version)
+	except ValueError:
+		jq_version_json =  {}
+		
+	if jq_version_json != None:
+		hba_card["Firmware Version"] = jq_version_json.get("Firmware Version","?")
+		hba_card["Driver Version"] = jq_version_json.get("Driver Version","?")
+		hba_card["Driver Name"] = jq_version_json.get("Driver Name","?")
+
+
+	storcli_address = subprocess.Popen(
+		shlex.split("{pth} /c{ctl} show all J".format(pth=storcli_path[hba_card["Model"]],ctl=hba_card["Ctl"])), stdout=subprocess.PIPE, universal_newlines=True)
+	jq_address_command = jq_bus_address[hba_card["Model"]]
+	jq_address_process = subprocess.Popen(
+			shlex.split(jq_address_command),stdin=storcli_address.stdout,stdout=subprocess.PIPE, universal_newlines=True, stderr=subprocess.STDOUT)
+	jq_address_process.wait()
+	jqout_address,_ = jq_address_process.communicate()
+	try:
+		jq_address_json = json.loads(jqout_address)
+	except ValueError:
+		jq_address_json =  {}
+
+	if jq_address_json != None:
+		hba_card["PCI Address"] = "{add}".format(add=jq_address_json.get("PCI Address","00:00:00:0"))
+		if hba_card["PCI Address"].startswith("00:00:"):
+			hba_card["PCI Address"] = hba_card["PCI Address"][5:]
+		if hba_card["PCI Address"].startswith("00:"):
+			hba_card["PCI Address"] = hba_card["PCI Address"][3:]
+		if hba_card["PCI Address"].endswith(":0"):
+			hba_card["PCI Address"] = hba_card["PCI Address"][:-2]
+		elif hba_card["PCI Address"].endswith(":00"):
+			hba_card["PCI Address"] = hba_card["PCI Address"][:-3]
+		hba_card["PCI Address"] = "{add}.0".format(add=hba_card["PCI Address"])
+
+	if "Bus Address" in hba_card.keys() and "PCI Address" in hba_card.keys() and hba_card["Bus Address"] != hba_card["PCI Address"]:
+		print("Updating Controller ID: {ctl}, PCI Address: {pci}, Bus Address: {ba}".format(ctl=hba_card["Ctl"],pci=hba_card["PCI Address"],ba=hba_card["Bus Address"]))
+		hba_card["Bus Address"] = hba_card["PCI Address"]
+
+# def getCardOrder():
+# 	# Count the number of storcli2 compatible controllers. If not zero return from the function with that many controllers. Let the normal process take over.
+# 	# If storcli2 controllers are 0 and non zero storcli64 controllers continue with this function
+# 	# this function added to handle the case of the pre-F8X servers. this is not needed in 9600 series systems
+# 	# this will cause a mapping problem in the scenario of having 96XX and 93/94 cards in the system.
+# 	storcli64_check_command = "/opt/45drives/tools/storcli64 show J | jq '.Controllers[0].\"Response Data\".\"Number of Controllers\"'"
+# 	storcli64_check_process = subprocess.Popen(storcli64_check_command, shell=True, stdout=subprocess.PIPE)
+# 	storcli64_controller_count_str,_ = storcli64_check_process.communicate()
+# 	storcli64_controller_count = storcli64_controller_count_str.decode('utf-8').strip()
+# 	storcli2_check_command = "/opt/45drives/tools/storcli2 show J | jq '.Controllers[0].\"Response Data\".\"Number of Controllers\"'"
+# 	storcli2_check_process = subprocess.Popen(storcli2_check_command, shell=True, stdout=subprocess.PIPE)
+# 	storcli2_controller_count_str,_ = storcli2_check_process.communicate()
+# 	storcli2_controller_count = storcli2_controller_count_str.decode('utf-8').strip()
+
+# 	hba_card_order = []
+
+# 	if int(storcli2_controller_count) > 0:
+# 		return hba_card_order
+# 	if int(storcli64_controller_count) > 0:
+# 		hba_order_command = "/opt/45drives/tools/storcli64 /call show J | jq -r '.Controllers[].\"Response Data\".\"PCI Address\"' | cut -d : -f 2"
+# 		hba_order_process = subprocess.Popen(hba_order_command, shell=True, stdout=subprocess.PIPE)
+# 		stdout,_ = hba_order_process.communicate()
+# 		hba_cards = stdout.decode('utf-8').splitlines()
+# 		hba_card_order  =[item for item in hba_cards if item]
+# 		return hba_card_order
+
+def getCardOrder():
+    # Count the number of storcli2 compatible controllers. If not zero return from the function with that many controllers.
+    # If storcli2 controllers are 0 and non-zero storcli64 controllers, continue with this function.
+    # Note: storcli2 may crash and emit a glibc malloc assert to stderr; capture stderr and treat non-numeric as zero.
+    storcli64_check_command = "/opt/45drives/tools/storcli64 show J | jq -r '.Controllers[0].\"Response Data\".\"Number of Controllers\" // 0'"
+    storcli2_check_command  = "/opt/45drives/tools/storcli2  show J | jq -r '.Controllers[0].\"Response Data\".\"Number of Controllers\" // 0'"
+
+    storcli2_out  = _run_and_get_stdout(storcli2_check_command, timeout=8)
+    storcli64_out = _run_and_get_stdout(storcli64_check_command, timeout=8)
+
+    storcli2_controller_count  = _safe_parse_int(storcli2_out)
+    storcli64_controller_count = _safe_parse_int(storcli64_out)
+
+    hba_card_order = []
+
+    # If any 96xx (storcli2) controllers exist, skip custom ordering here.
+    if storcli2_controller_count > 0:
+        return hba_card_order
+
+    # Else, if older 93xx/94xx (storcli64) exist, derive order from storcli64
+    if storcli64_controller_count > 0:
+        hba_order_command = "/opt/45drives/tools/storcli64 /call show J | jq -r '.Controllers[].\"Response Data\".\"PCI Address\"' | cut -d : -f 2"
+        hba_order_process = subprocess.Popen(hba_order_command, shell=True, stdout=subprocess.PIPE)
+        stdout, _ = hba_order_process.communicate()
+        hba_cards = (stdout or b"").decode('utf-8', errors='replace').splitlines()
+        hba_card_order = [item.strip() for item in hba_cards if item.strip()]
+        return hba_card_order
+
+    # Nothing found / or commands failed
+    return hba_card_order
+
+def formatBusAddresses(hba_cards):
+	# take input of PCI address, alter to match format lspci expects for comparison
+	bus_addresses_formatted = [item + ":00.0" for item in hba_cards]
+	return bus_addresses_formatted
+
+def fixControllerID(hba, correct_order):
+	# take formatted fixed ctl order, match pci address in both and update ctl to match correct order
+	for item in hba:
+		if item['Bus Address'] in correct_order:
+			item['Ctl'] = correct_order.index(item['Bus Address'])
+
+def hba_lspci(server):
+	# determine the model and count of hba cards present in the system
+	# by parsing the output of "lspci -d 1000:* -vv -i /opt/45drives/tools/pci.ids"
+	# example output:
+	#17:00.0 RAID bus controller: Broadcom / LSI Fusion-MPT 24GSAS/PCIe SAS40xx (rev 01)
+	#    Subsystem: Broadcom / LSI eHBA 9600-24i Tri-Mode Storage Adapter
+	#    Kernel driver in use: mpi3mr
+	#    Kernel modules: mpi3mr
+	#65:00.0 RAID bus controller: Broadcom / LSI Fusion-MPT 24GSAS/PCIe SAS40xx (rev 01)
+	#    Subsystem: Broadcom / LSI eHBA 9600-16i Tri-Mode Storage Adapter
+	#    Kernel driver in use: mpi3mr
+	#    Kernel modules: mpi3mr
+
+	hba_count = 0
+	hba = []
+	hba_models = {
+		"SAS9305-16i":16,
+		"SAS9305-24i":24,
+		"HBA 9405W-16i":16,
+		"HBA 9400-16i":16,
+		"9600-24i":24,
+		"9600-16i":16,
+		"9660-16i":16,
+		"9361-16i":16,
+		"9361-24i":24
+	}
+
+	lspci_output = []
+
+	try:
+		lspci_result = subprocess.Popen(["lspci", "-d", "1000:*","-vv", "-i", "/opt/45drives/tools/pci.ids"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,universal_newlines=True).stdout.read()
+	except:
+		print("ERROR: error running lspci -d 1000:* -vv")
+		exit(1)
+
+	hba_drivers = {
+		"SAS9305-16i":"mpt3sas",
+		"SAS9305-24i":"mpt3sas",
+		"HBA 9405W-16i":"mpt3sas",
+		"HBA 9400-16i":"mpt3sas",
+		"9600-24i":"mpi3mr",
+		"9600-16i":"mpi3mr",
+		"9660-16i":"mpi3mr",
+		"9361-16i":"megaraid_sas",
+		"9361-24i":"megaraid_sas"
+	}
+
+	hba_adapters = {
+		"SAS9305-16i":"SAS3224 PCI-Express Fusion-MPT SAS-3",
+		"SAS9305-24i":"SAS3224 PCI-Express Fusion-MPT SAS-3",
+		"HBA 9405W-16i":"SAS3616 Fusion-MPT Tri-Mode I/O Controller Chip (IOC)",
+		"HBA 9400-16i":"SAS3416 Fusion-MPT Tri-Mode I/O Controller Chip (IOC)",
+		"9600-24i":"Fusion-MPT 24GSAS/PCIe SAS40xx",
+		"9600-16i":"Fusion-MPT 24GSAS/PCIe SAS40xx",
+		"9660-16i":"Fusion-MPT 24GSAS/PCIe SAS40xx",
+		"9361-16i":"MegaRAID SAS-3 3316",
+		"9361-24i":"MegaRAID SAS-3 3316"
+	}
+
+	hybrid_flag = False
+	hwraid_flag = False
+
+	hba_dict = {
+		"Model":"?",
+		"Adapter":"?",
+		"Bus Address":"?",
+		"Drive Connections":0,
+		"Kernel Driver":"?",
+		"Ctl":0,
+		"Firmware Version": "?",
+		"Driver Version": "?",
+		"Driver Name": "?"
+	}
+
+	hwraid_models = [
+		"9660-16i", "9361-16i", "9361-24i"
+	]
+
+	if server["Motherboard"]["Product Name"] == "MS73-HB0-000":
+		rx_pci=re.compile(
+		r"^((?:[0-9A-Fa-f]{4}:)?[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f]).*\n"
+		r"\tSubsystem: .*?(9600-16i|9600-24i|SAS9305-16i|SAS9305-24i|"
+		r"HBA 9405W-16i|9361-16i|HBA 9400-16i|9361-24i|9660-16i).*",
+		re.MULTILINE
+		)
+	else:
+		rx_pci=re.compile(r"^(\w\w:\w\w\.\w).*\n.*(?:(?:(?:^\t).*\n)+^.*)?(9600-16i|9600-24i|SAS9305-16i|SAS9305-24i|HBA 9405W-16i|9361-16i|HBA 9400-16i|9361-24i|9660-16i).*\n",re.MULTILINE)
+	
+	ctl = 0
+	for match in rx_pci.finditer(lspci_result):
+		hba_dict["Model"] = match.group(2)
+		hba_dict["Adapter"] = hba_adapters[match.group(2)]
+		hba_dict["Bus Address"] = match.group(1)
+		hba_dict["Drive Connections"] = hba_models[match.group(2)]
+		hba_dict["Kernel Driver"] = hba_drivers[match.group(2)]
+		hba_dict["Ctl"] = ctl
+		ctl = ctl + 1
+		if hba_dict["Drive Connections"] == 24:
+			hybrid_flag = True
+		hba.append(hba_dict.copy())
+
+	if hba:
+		hba_card_order = getCardOrder()
+		if hba_card_order:
+			formatted_hba_order = formatBusAddresses(hba_card_order)
+			fixControllerID(hba, formatted_hba_order)
+
+	if len(hba) > 0:
+		for card in hba:
+			getStorcliInfo(card)
+			if card["Model"] in hwraid_models:
+				hwraid_flag = True
+
+	if len(hba) != 0:
+		# get list of pci devices including their bus address and slot id
+		pci_slots = getDmidecodePCI(server)
+
+		# get a list of pci devices used by system
+		sys_bus_path = "/sys/bus/pci/devices"
+		try:
+			sys_bus_addrs = os.listdir(sys_bus_path)
+		except:
+			sys_bus_addrs = []
+
+		for pci_slot in pci_slots:
+			for card in hba:
+				if card["Bus Address"] in pci_slot["Bus Address"]:
+					# The bus address provided by dmidecode contains the bus address provided by lspci.
+					# we can assign the PCI Slot accordingly.
+					card["PCI Slot"] = pci_slot.get("PCI Slot", pci_slot.get("ID", "Unknown"))
+
+					if len(sys_bus_addrs) > 0 and pci_slot["Bus Address"] not in sys_bus_addrs:
+						# dmidecode gave a bus address that does not match the one used by the system
+						for j in range(0,len(sys_bus_addrs)):
+							if card["Bus Address"] in sys_bus_addrs[j]:
+								# we have found the system bus address that matches the substring
+								# address provided by lspci update the card's bus address field
+								card["Bus Address"] = sys_bus_addrs[j]
+								print("using /sys/bus/pci/devices",sys_bus_addrs[j])
+								break
+					else:
+						# use the bus address provided by dmidecode
+						# update the cards bus address to the full format (eg: 0000:01:00.0)
+						card["Bus Address"] = pci_slot["Bus Address"]
+		
+		#ensure that the bus address is the one in use by the system.
+		verify_bus_addresses(sys_bus_addrs,hba)
+
+		#sort them in ascending order
+		hba = sorted(hba, key=lambda k: k['Ctl']) 
+
+	return hba, hybrid_flag, hwraid_flag
+
+def verify_bus_addresses(sys_bus_addrs,hba_cards):
+	for card in hba_cards:
+		if len(sys_bus_addrs) > 0:
+			for j in range(0,len(sys_bus_addrs)):
+				if card["Bus Address"] in sys_bus_addrs[j]:
+					# we have found the system bus address that matches the substring
+					# address provided by lspci update the card's bus address field
+					card["Bus Address"] = sys_bus_addrs[j]
+					break
+
+def serial_check():
+	#### OLD SERIAL ######################################
+	# FRU Device Description : Builtin FRU Device (ID 0)
+	# Chassis Type          : Unspecified
+	# Chassis Part Number   : N/A
+	# Chassis Serial        : N/A
+	# Board Mfg Date        : Tue Dec  1 05:04:00 2020
+	# Board Mfg             : Supermicro
+	# Board Product         : X11SPL-F
+	# Board Serial          : 1238383213
+	# Board Part Number     : N/A
+	# Product Manufacturer  : 45Drives
+	# Product Name          : Storinator
+	# Product Part Number   : S45
+	# Product Version       : 5.0
+	# Product Serial        : 1234-1
+	# Product Asset Tag     : N/A
+
+	#### NEW SERIAL #####################################
+	# FRU Device Description : Builtin FRU Device (ID 0)
+	# Chassis Type          : Rack Mount Chassis
+	# Chassis Part Number   : AV15
+	# Chassis Serial        : 13371337-1
+	# Board Mfg Date        : Tue Dec  1 05:04:00 2020
+	# Board Mfg             : Supermicro
+	# Board Product         : X11SPL-F
+	# Board Serial          : ZM18AS011320
+	# Board Part Number     : X11SPL-F
+	# Product Manufacturer  : 45Drives
+	# Product Name          : Stornado-AV15-Enhanced
+	# Product Part Number   : AV15
+	# Product Version       : (Enhanced)
+	# Product Serial        : 13371337-1
+	# Product Asset Tag     : IPMIPASSWD
+	serial_fields = [
+		"Chassis Type",
+		"Chassis Part Number",
+		"Chassis Serial",
+		"Board Mfg Date",
+		"Board Mfg",
+		"Board Product",
+		"Board Serial",
+		"Board Part Number",
+		"Product Manufacturer",
+		"Product Name",
+		"Product Part Number",
+		"Product Version",
+		"Product Serial",
+		"Product Asset Tag"
+	]
+
+	serial_result = {
+		"Chassis Type":"?",
+		"Chassis Part Number":"?",
+		"Chassis Serial":"?",
+		"Board Mfg Date":"?",
+		"Board Mfg":"?",
+		"Board Product":"?",
+		"Board Serial":"?",
+		"Board Part Number":"?",
+		"Product Manufacturer":"?",
+		"Product Name":"?",
+		"Product Part Number":"?",
+		"Product Version":"?",
+		"Product Serial":"?",
+		"Product Asset Tag":"?"
+	}
+
+	try:
+		ipmi_test = subprocess.run(["ipmitool","fru","print","0"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+	except:
+		print("ERROR: ipmitool is not installed")
+		exit(1)
+ 
+	if ipmi_test:
+		# No IPMI — try FRU ini first
+		print("/opt/45drives/tools/server_identifier: ipmitool fru command failed. IPMI is not present on this system. Attempting to pull info from FRU ini")
+
+		fru = read_latest_fru_ini()
+		if fru:
+			serial_result["Product Name"]        = fru["product"]
+			serial_result["Product Part Number"] = fru.get("part", "") or "?"
+			serial_result["Product Serial"]      = fru.get("serial", "") or "?"
+			return serial_result
+
+		# FRU ini not found/usable — fall back to DMI (previous behavior)
+		print("/opt/45drives/tools/server_identifier: FRU ini not found or incomplete. Falling back to DMI tables")
+		with open('/sys/class/dmi/id/chassis_serial', 'r') as file:
+			serial_result["Product Serial"] = file.read().rstrip('\n')
+		with open('/sys/class/dmi/id/chassis_version', 'r') as file:
+			pn = file.read().rstrip('\n')
+		serial_result["Product Part Number"] = pn
+		if pn in ["HL4", "HL8", "HL15", "HL15_BEAST"]:
+			serial_result["Product Name"] = "HomeLab-" + pn
+		else:
+			serial_result["Product Name"] = "Storinator"  # safe default to avoid KeyError later
+		return serial_result
+
+	ipmi_result = subprocess.Popen(["ipmitool","fru","print","0"],stdout=subprocess.PIPE,universal_newlines=True).stdout
+	for line in ipmi_result:
+		for field in serial_fields:
+			regex = re.search("({fld})\s+:\s+(\S+)".format(fld=field),line)
+			if regex != None:
+				serial_result[regex.group(1)] = regex.group(2)
+	return serial_result
+
+def determine_model(mobo_model_str,hba_dict_lst,chassis_size_str):
+	# Use the detected hardware to identify whe model of storinator if it was serialised using the old 
+	# serialization tool.
+	hba_16i_count = 0
+	hba_24i_count = 0
+
+	model = "?"
+	for card in hba_dict_lst:
+		if card["Drive Connections"] == 16:
+			hba_16i_count += 1
+		elif card["Drive Connections"] == 24:
+			hba_24i_count += 1
+
+	for sys_type in g_product_lut.keys():
+		if (mobo_model_str in g_product_lut[sys_type][g_product_lut_idx["MOBO_MODEL"]] and
+			g_product_lut[sys_type][g_product_lut_idx["24I_COUNT"]] == hba_24i_count and
+			g_product_lut[sys_type][g_product_lut_idx["16I_COUNT"]] == hba_16i_count and
+			g_product_lut[sys_type][g_product_lut_idx["CHASSIS_SIZE"]] == chassis_size_str):
+				model = sys_type
+
+	if model == "?":
+		if mobo_model_str != "?":
+			print("/opt/45drives/tools/server_identifier: !! WARNING !! " + mobo_model_str + " Motherboard is not supported for Automatic Identification.")
+		print("/opt/45drives/tools/server_identifier: !! WARNING !! Automatic Identification failed. ")
+		print("/opt/45drives/tools/server_identifier: Setting Model to \"Storinator(Generic)\"")
+		# TODO: ADD A MANUAL SELECTION TOOL HERE
+		model = "Storinator"
+
+	return model
+
+def update_json_file(server,scan_time):
+	old_file = None
+	old_server = None
+	json_dir = "/etc/45drives/server_info"
+
+	#make a directory to store the server info files
+	if not os.path.isdir(json_dir):
+		print("/opt/45drives/tools/server_identifier: Server Info Directory Created:  ("+json_dir+")")
+		os.makedirs(json_dir)
+
+	# load the existing server_info.json file in as a json object.
+	if os.path.exists(json_dir+"/server_info.json") and os.path.isfile(json_dir+"/server_info.json"):
+		old_file = open(json_dir+"/server_info.json","r")
+		try:
+			old_server = json.load(old_file)
+		except Exception as e:
+			print("/opt/45drives/tools/server_identifier: Overwriting "+json_dir+"server_info.json with scan results.")
+			old_server = None
+		old_file.close()
+
+	if old_server != None:
+		# json object loaded in successfully
+		if "Edit Mode" not in old_server.keys():
+			old_server["Edit Mode"] = False
+
+		if old_server != server and server["Model"] != "?" and not old_server["Edit Mode"]:
+			# the hardware configuration has changed since last time
+			# back up the existing server_info_file
+			backup_file = open(json_dir+"/server_info_backup_"+scan_time+".json","w")
+			backup_file.write(json.dumps(old_server,indent=4))
+			backup_file.close()
+
+			print("/opt/45drives/tools/server_identifier: Hardware configuration has changed since last scan.")
+			print("                              A backup has been created in ("+json_dir+"/server_info_backup_"+scan_time+".json)")
+			
+			new_file = open(json_dir+"/server_info.json","w")
+			new_file.write(json.dumps(server,indent=4))
+			new_file.write("\n")
+			new_file.close()
+			print("--------------------------------------------------------------------------------")
+			print(json_dir+"/server_info_backup_"+scan_time+".json)")
+			print("--------------------------------------------------------------------------------")
+			print(json.dumps(old_server,indent=4))
+			print("--------------------------------------------------------------------------------")
+			print(json_dir+"/server_info.json:")
+			print("--------------------------------------------------------------------------------")
+			print(json.dumps(server,indent=4))
+
+		elif old_server != server and old_server["Edit Mode"]:
+			print("/opt/45drives/tools/server_identifier: Hardware configuration has changed since last scan.")
+			print("                              \"Edit Mode\" is enabled. ("+json_dir+"/server_info.json)")
+			print("                              Results of this scan will not be saved.")
+
+		if old_server["Edit Mode"]:
+			print("--------------------------------------------------------------------------------")
+			print(json_dir+"/server_info.json:")
+			print("--------------------------------------------------------------------------------")
+			print(json.dumps(old_server,indent=4))
+			print("--------------------------------------------------------------------------------")
+			print("Scan Results: (\"Edit Mode\":true i.e. server_info.json will not be modified)")
+			print("--------------------------------------------------------------------------------")
+			print(json.dumps(server,indent=4))
+		else:
+			print("--------------------------------------------------------------------------------")
+			print("Scan Results: ")
+			print("--------------------------------------------------------------------------------")
+			print(json.dumps(server,indent=4))
+
+
+	elif server["Model"] != "?":
+		# this is the first time that this script was run on the system successfully
+		new_file = open(json_dir+"/server_info.json","w")
+		new_file.write(json.dumps(server,indent=4))
+		new_file.write("\n")
+		new_file.close()
+		print("/opt/45drives/tools/server_identifier: Server Info File Created:  ("+json_dir+"/server_info.json)")
+		print("--------------------------------------------------------------------------------")
+		print(json_dir+"/server_info.json:")
+		print("--------------------------------------------------------------------------------")
+		print(json.dumps(server,indent=4))
+	
+	else:
+		# this was unsuccessful. Write the info file for the first time to store the result.
+		print("/opt/45drives/tools/server_identifier: Placeholder Server Info File Created:  ("+json_dir+"/server_info.json)")
+		new_file = open(json_dir+"/server_info.json","w")
+		new_file.write(json.dumps(server,indent=4))
+		new_file.write("\n")
+		new_file.close()
+		print("--------------------------------------------------------------------------------")
+		print(json_dir+"/server_info.json:")
+		print("--------------------------------------------------------------------------------")
+		print(json.dumps(server,indent=4))
+
+	if server["Model"] == "?":
+		print("/opt/45drives/tools/server_identifier: !! WARNING !!")
+		print("                              Unable to determine server model automatically.")
+		print("                              Server Info File Path:  ("+json_dir+"/server_info.json)")
+		print("                              You can edit the server_info file manually and run dmap again if using non-standard hardware.")
+		print("                              If using standard 45Drives server hardware. Serialization should be performed before running dmap.")
+
+def vm_check(mobo_dict):
+	return (mobo_dict["Manufacturer"] == "?" and mobo_dict["Product Name"] == "?" and mobo_dict["Serial Number"] == "?")
+
+def old_serial(serial_result):
+	for field in serial_result.keys():
+		if serial_result[field] == "N/A":
+			return True
+	return False
+
+def vm_passthrough(server):
+	server["Model"] = "Storinator-{cs}-VM".format(cs=g_chassis_sizes[len(server["HBA"])])
+	server["Chassis Size"] = g_chassis_sizes[len(server["HBA"])]
+	server["Motherboard"]["Serial Number"] = "VIRTUAL_MACHINE"
+	server["Motherboard"]["Manufacturer"] = "VIRTUAL_MACHINE"
+	server["Motherboard"]["Product Name"] = "VM_MOTHERBOARD"
+	server["Serial"] = "VIRTUAL_MACHINE"
+	print("/opt/45drives/tools/server_identifier: Virtual Machine with HBA Pass Through Detected.")
+	print("                              Setting Model to \"{m}\", and Chassis Size to \"{c}\"".format(m=server["Model"],c=server["Chassis Size"]))
+	try:
+		lspci_result = subprocess.Popen(["lspci"],stdout=subprocess.PIPE,universal_newlines=True, stderr=subprocess.PIPE).stdout
+	except:
+		print("ERROR: lspci command failed")
+		exit(1)
+	for hba_card in server["HBA"]:
+		for line in lspci_result:
+			regex = re.search("^({addr}).*{adap}".format(addr=hba_card["Bus Address"],adap=hba_card["Adapter"]),line)
+			if regex != None:
+				hba_card["Bus Address"] = "0000:" + regex.group(1)
+
+def edit_mode_check():
+	old_file = None
+	old_server = None
+	json_dir = "/etc/45drives/server_info"
+
+	#make a directory to store the server info files
+	if not os.path.isdir(json_dir):
+		print("/opt/45drives/tools/server_identifier: Server Info Directory Created:  ("+json_dir+")")
+		os.makedirs(json_dir)
+
+	# load the existing server_info.json file in as a json object.
+	if os.path.exists(json_dir+"/server_info.json") and os.path.isfile(json_dir+"/server_info.json"):
+		old_file = open(json_dir+"/server_info.json","r")
+		try:
+			old_server = json.load(old_file)
+		except Exception as e:
+			print("/opt/45drives/tools/server_identifier: Error loading data from " + json_dir + "/server_info.json")
+			print("Error Message: ",e)
+			if input("/opt/45drives/tools/server_identifier: Would you like to overwrite existing file with new scan results? (y/n):") == "n":
+				print("/opt/45drives/tools/server_identifier: Make the necessary adjustments to "+ json_dir + "/server_info.json and try again.")
+				old_file.close()
+				sys.exit(1)
+			old_server = None
+		old_file.close()
+
+	if old_server != None:
+		# json object loaded in successfully
+		if "Edit Mode" not in old_server.keys():
+			old_server["Edit Mode"] = False
+		return old_server["Edit Mode"]
+	return False
+
+def get_os():
+	os_release_path = "/etc/os-release"
+	os_release_fields = {
+		"NAME":"?",
+		"VERSION_ID":"?"
+		}
+	if os.path.isfile(os_release_path):
+		os_release_file = open(os_release_path,"r")
+		os_release_lines = os_release_file.read().splitlines()
+		os_release_file.close()
+		for line in os_release_lines:
+			for field in os_release_fields.keys():
+				regex = re.search("^({fld})=".format(fld=field) + '\"(.+?)\"',line)
+				if regex != None:
+					os_release_fields[regex.group(1)] = regex.group(2)
+
+	return os_release_fields["NAME"],os_release_fields["VERSION_ID"]
+
+def _parent_pci_of(path):
+    """
+    Given a /sys/class/ata_port/ataX path, walk its 'device' symlink back to the
+    PCI device path like .../0000:01:00.1 . Return that PCI path basename.
+    """
+    try:
+        dev = os.path.realpath(os.path.join(path, "device"))
+        # Walk up until we hit a PCI-like node (contains a colon)
+        cur = dev
+        while cur and cur != "/" and ":" not in os.path.basename(cur):
+            cur = os.path.dirname(cur)
+        base = os.path.basename(cur)
+        return base if ":" in base else None
+    except Exception:
+        return None
+
+def infer_homelab_model_from_sysfs_ports(allowed_mobos=None, detected_mobo_name=""):
+    """
+    Infer HL4 vs HL8 by counting ATA ports per SATA controller in sysfs.
+    Works with zero drives installed.
+
+    Returns ("HomeLab-HL4", "HL4") / ("HomeLab-HL8","HL8") / (None, None).
+    If allowed_mobos is provided, only runs inference when the detected
+    motherboard name is in that whitelist.
+    """
+    if allowed_mobos and detected_mobo_name not in allowed_mobos:
+        return (None, None)
+
+    base = "/sys/class/ata_port"
+    if not os.path.isdir(base):
+        return (None, None)
+
+    # Collect ata* entries (ata1, ata2, ...) and group them by parent PCI device
+    try:
+        entries = [os.path.join(base, d) for d in os.listdir(base) if d.startswith("ata")]
+    except Exception:
+        return (None, None)
+
+    if not entries:
+        return (None, None)
+
+    groups = {}  # pci_dev -> set(ata ports)
+    for ap in entries:
+        pci = _parent_pci_of(ap)
+        if not pci:
+            continue
+        groups.setdefault(pci, set()).add(ap)
+
+    if not groups:
+        return (None, None)
+
+    # Count usable ports per controller. We consider a controller "big"
+    # when it exposes >=4 ATA ports (HL series wiring).
+    big = [pci for pci, ports in groups.items() if len(ports) >= 4]
+
+    if len(big) == 1:
+        return ("HomeLab-HL4", "HL4")
+    if len(big) >= 2:
+        return ("HomeLab-HL8", "HL8")
+
+    return (None, None)
+
+def main():
+	server = {
+		"Motherboard":"?",
+		"HBA":[],
+		"Hybrid":False,
+		"Serial":"?",
+		"Model":"?",
+		"Alias Style":"?",
+		"Chassis Size":"?",
+		"VM":False,
+		"Edit Mode":False,
+		"OS NAME": "?",
+		"OS VERSION_ID": "?",
+		"Auto Alias": False,
+		"HWRAID": False
+	}
+
+	# get current time
+	current_day = datetime.today()
+	current_time = datetime.now()
+	scan_time = current_day.strftime("%Y_%m_%d_") + current_time.strftime("%H_%M")
+	server["Edit Mode"] = edit_mode_check()
+	serial_result = {}
+	
+	server["Motherboard"] = motherboard()
+	server["HBA"], server["Hybrid"], server["HWRAID"] = hba_lspci(server)
+	server["VM"] = vm_check(server["Motherboard"])
+	if not server["VM"]:
+		serial_result = serial_check()
+		server["Serial"] = serial_result["Product Serial"].upper()
+		server["Chassis Size"] = serial_result["Product Part Number"].upper()
+		server["Model"] = determine_model(server["Motherboard"]["Product Name"],server["HBA"],server["Chassis Size"]) if old_serial(serial_result) else serial_result["Product Name"]
+	
+ 	# If we don't have IPMI and fell back to a generic Product Name,
+	# try to infer if unit is HL4/HL8 from the actual SATA topology.
+	mobo_name = server["Motherboard"].get("Product Name","")
+
+	if (not server["VM"]
+		and server["Model"] in ("Storinator","?","",None)
+		and len(server.get("HBA",[])) == 0):
+		inferred_model, inferred_size = infer_homelab_model_from_sysfs_ports(
+			allowed_mobos=("B550I AORUS PRO AX"),
+			detected_mobo_name=mobo_name
+		)
+		if inferred_model:
+			server["Model"] = inferred_model
+			server["Chassis Size"] = inferred_size
+
+	if server["Model"] == "?":
+		if len(server["HBA"]) > 0 and server["VM"]:
+			vm_passthrough(server) 			# VM with hba pass through detected, update server accordingly
+
+	server["Alias Style"] = g_product_lut[server["Model"]][g_product_lut_idx["ALIAS_STYLE"]]
+
+	# set auto alias flag for servers that are automatically aliased using udev rules.
+	if server["Alias Style"] in ["F2STORNADO","STORINATORUBM"]:
+		if server["Chassis Size"] == "MI4_UBM" and len(server["HBA"]) == 0:
+			server["Auto Alias"] = False # If Mi4 and does not have a HBA card it is using onboard controllers and therefore cannot be auto mapped
+		else: 
+			server["Auto Alias"] = True
+	
+	# This is added to use only a single chassis size for the Stornado
+	if "Product Part Number" in serial_result.keys():
+		if serial_result["Product Part Number"].upper() == "F32":
+			server["Alias Style"] = "STORNADO"
+			server["Chassis Size"] = "AV15"
+
+	# get OS NAME and OS VERSION_ID
+	server["OS NAME"], server["OS VERSION_ID"] = get_os()
+	update_json_file(server,scan_time)
+
+	# warn user if improper number of HBA cards are detected.
+	if len(server["HBA"]) != g_product_lut[server["Model"]][g_product_lut_idx["24I_COUNT"]] + g_product_lut[server["Model"]][g_product_lut_idx["16I_COUNT"]]:
+		print("/opt/45drives/tools/server_identifier: !! WARNING !!")
+		print("                              Quantity of HBA Cards detected does not match the quantity expected")
+		print("                              for a \"{m}\". Drive aliasing may not work as desired. ".format(m=server["Model"]))
+	exit(0)
+
+if __name__ == "__main__":
+	main()

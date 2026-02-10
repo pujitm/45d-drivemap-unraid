@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# wipedev - wipes the partition table of drives in system
+
+# Copyright 2016, Brett Kelly   <bkelly@45drives.com>
+#           2023, Josh Boudreau <jboudreau@45drives.com>
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+usage() { # Help
+  local exit_code=${1:-0}
+  cat <<'EOF'
+Usage:	wipedev [-f] [-D] [-a] [-d BAY]... [BAY...]
+    [-f] Force (no confirmation prompt)
+    [-D] Dry run
+    [-a] Wipe all drives
+    [-d] Wipe specific drive (e.g. `wipedev -d 1-1`)
+    [-h] Displays this message
+EOF
+  exit "$exit_code"
+}
+
+DEVICE_PATH=/dev/disk/by-vdev
+CONFIG_PATH=/etc
+
+ECHO_IF_DRY_RUN=
+ALL_FLAG=
+FORCE_FLAG=
+BAYS=()
+
+while getopts 'Dad:fh' OPTION; do
+  case "$OPTION" in
+  D)
+    ECHO_IF_DRY_RUN='echo (dry run)'
+    ;;
+  a)
+    ALL_FLAG=1
+    ;;
+  d)
+    if [ -b "$DEVICE_PATH/$OPTARG" ]; then
+      BAYS+=("$OPTARG")
+    else
+      echo "Warning: $OPTARG is either empty or does not exist" >&2
+    fi
+    ;;
+  f)
+    FORCE_FLAG=1
+    ;;
+  h)
+    usage 0
+    ;;
+  ?)
+    usage 2
+    ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [ "$#" -gt 0 ]; then
+  # add additional positional arguments as if they were supplied with -d
+  BAYS+=("$@")
+fi
+
+if [ -n "$ALL_FLAG" ]; then
+  readarray -t ALL_BAYS < <(awk '$1 == "alias" {print $2}' "$CONFIG_PATH/vdev_id.conf")
+  [ ${#ALL_BAYS[@]} -eq 0 ] && echo "Error getting all drives from $CONFIG_PATH/vdev_id.conf" >&2 && exit 1
+  BAYS+=("${ALL_BAYS[@]}")
+fi
+
+[ ${#BAYS[@]} -eq 0 ] && echo "No drives specified" >&2 && usage 2
+
+# remove duplicate bays
+IFS= readarray -t -d '' BAYS < <(printf '%s\0' "${BAYS[@]}" | sort -u -z)
+
+do_wipe() {
+  local EXIT_CODE=0
+
+  for bay in "${BAYS[@]}"; do
+    if [ ! -b "$DEVICE_PATH/$bay" ]; then
+      echo "Drive bay [$bay] is empty"
+    elif $ECHO_IF_DRY_RUN wipefs -a "$DEVICE_PATH/$bay"; then
+      [ -z "$ECHO_IF_DRY_RUN" ] && echo "device $bay fs has been wiped"
+    else
+      EXIT_CODE=$?
+      echo "Error wiping $bay fs try again manually 'wipefs -a $DEVICE_PATH/$bay'"
+    fi
+  done
+
+  return $EXIT_CODE
+}
+
+if [[ "$FORCE_FLAG" == "1" ]]; then
+  do_wipe
+else
+  echo "The following devices will be wiped:"
+  for bay in "${BAYS[@]}"; do
+    printf "$DEVICE_PATH/%s (%s)\n" "$bay" "$(lsblk -ndo NAME "$DEVICE_PATH/$bay" 2>/dev/null || echo "not present")"
+  done
+  [[ -n "$ECHO_IF_DRY_RUN" ]] && echo "(Dry run)"
+  read -rp "Proceed? [y/N] " yn
+  if [[ "$yn" == [Yy] ]]; then
+    do_wipe
+  else
+    echo "Exiting"
+  fi
+fi

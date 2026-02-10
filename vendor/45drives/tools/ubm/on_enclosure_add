@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# SUBSYSTEM=="enclosure", IMPORT{program}="/opt/45drives/ubm/on_enclosure_add"
+#
+# Creates symbolic links in /var/run/45drives/slots pointing to enclosure array slot
+# devices for LED control, etc.
+#
+# Sets SLOT_LINKS environment variable for removal in /opt/45drives/ubm/on_enclosure_remove
+#
+# Part of 45drives-tools
+#
+# Authors
+# Josh Boudreau <jboudreau@45drives.com> 2023
+#
+
+# shellcheck source=./ubm_funcs.sh
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/ubm_funcs.sh"
+
+check_ubm_func_support || exit 0
+
+SLOT_LINK_DIR=/var/run/45drives/slots
+CACHE_DIR='/var/cache/45drives/ubm'
+
+# DEVPATH defined in env by udev
+[ -z "$DEVPATH" ] && perror "DEVPATH not in env!" && exit 0
+
+ENCLOSURE_PATH="/sys/$DEVPATH"
+
+[ ! -d "$ENCLOSURE_PATH" ] && perror "$ENCLOSURE_PATH not a directory!" && exit 0
+
+mkdir -p "$SLOT_LINK_DIR/numeric" || perror "Failed to mkdir -p $SLOT_LINK_DIR/numeric" || exit 0
+
+COMPONENTS=$(cat "$ENCLOSURE_PATH/components") || perror "failed to grab # of components!"  || exit 0
+
+SLOT_LINKS=()
+
+for ((i = 0; i < COMPONENTS; i++)); do
+  slot_dev="$ENCLOSURE_PATH/$i"
+  STATUS=$(cat "$slot_dev/status" 2>/dev/null) || continue
+  [[ "$STATUS" != "unsupported" && "$STATUS" != "unavailable" ]] || continue
+  TYPE=$(cat "$slot_dev/type" 2>/dev/null) || continue
+  [[ "$TYPE" == 'array device' ]] || continue
+  SLOT_NUM=$(cat "$slot_dev/slot" 2>/dev/null) || continue
+  ln -snf "$slot_dev" "$SLOT_LINK_DIR/numeric/$SLOT_NUM" || continue
+  SLOT_LINKS+=("$SLOT_LINK_DIR/numeric/$SLOT_NUM")
+  SLOT_NAME=$(slot_num_to_slot_name "$SLOT_NUM") || perror "Failed to lookup slot name for slot $SLOT_NUM" || continue
+  ln -snf "numeric/$SLOT_NUM" "$SLOT_LINK_DIR/$SLOT_NAME" || continue
+  SLOT_LINKS+=("$SLOT_LINK_DIR/$SLOT_NAME")
+done
+
+[ "${#SLOT_LINKS[@]}" -gt 0 ] && printf '%s=%s\n' SLOT_LINKS "${SLOT_LINKS[*]}"

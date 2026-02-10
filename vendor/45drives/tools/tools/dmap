@@ -1,0 +1,1322 @@
+#!/usr/bin/env python3
+###############################################################################
+# dmap - used to create /etc/vdev_id.conf for 45Drives storage servers
+#
+# Copyright (C) 2020, Josh Boudreau <jboudreau@45drives.com>
+#                     Mark Hooper   <mhooper@45drives.com>
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+###############################################################################
+###############################################################################
+
+import re
+import subprocess
+import os
+import sys
+import json
+import shlex
+import shutil
+from optparse import OptionParser
+import glob
+import itertools
+
+g_quiet = False
+g_enable_jbod = False
+
+
+###############################################################################
+# Name: get_path_variables
+# Args: None
+# Desc: Updated in tools 1.8.1, conf_path = /etc, dev_path =/dev. dmap will 
+#       now always replace /usr/lib/udev/vdev_id_45drives AND 
+#       /usr/lib/udev/rules.d/68-vdev.rules with those provided 
+#       in /opt/45drives/tools/. This will ensure that our udev rules are
+#       applied.
+###############################################################################
+def get_path_variables():
+	conf_path = "/etc"	
+	dev_path = "/dev"
+	return conf_path, dev_path
+
+
+###############################################################################
+# Name: reload_udev
+# Args: None
+# Desc: runs "udevadm control --reload-rules"
+###############################################################################
+def reload_udev():
+	reload_successful = False
+	log("Reloading udev rules")
+	try:
+		reload_call = subprocess.run(["udevadm","control","--reload-rules"])
+	except OSError:
+		log("Error reloading udev rules (udevadm control --reload-rules)")
+		sys.exit(1)
+
+###############################################################################
+# Name: trigger_udev
+# Args: None
+# Desc: runs two commands (udevadm trigger, udevadm settle), will only attempt
+#       the second command it the first command returned a successful result.
+###############################################################################
+def trigger_udev():
+	trigger_successful = False
+	log("Triggering udev rules")
+	try:
+		trigger_call = subprocess.run(["udevadm","trigger"])
+		if trigger_call.returncode == 0:
+			trigger_successful = True
+	except OSError:
+		log("Error triggering udevadm (udevadm trigger)")
+		sys.exit(1)
+
+	if trigger_successful:
+		try:
+			settle_call = subprocess.run(["udevadm","settle"])
+			if settle_call.returncode != 0:
+				raise OSError()
+		except OSError:
+			log("Error settling udevadm (udevadm settle)")
+			sys.exit(1)			
+
+###############################################################################
+# Name: reset_map
+# Args: config_path
+# Desc: removes the existing vdev_id.conf file located in the directory
+#       provided by config_path. Then udev is triggered, which removes
+#		the drive ailiasing that existed on the machine.
+###############################################################################
+def reset_map(config_path):
+	try:
+		os.remove(config_path + "vdev_id.conf")
+	except OSError:
+		pass
+	trigger_udev()
+	log("Drive Aliasing reset")
+	sys.exit(0)
+
+###############################################################################
+# Name: log
+# Args: message
+# Desc: outputs the message to stdout contingent on the global quiet flag.
+###############################################################################
+def log(message):
+	if not g_quiet:
+		print(message)
+
+###############################################################################
+# Name: check_root
+# Args: None
+# Desc: Ensures that dmap is running as root
+###############################################################################
+def check_root():
+	root_test =	subprocess.run(["ls","/root"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+	if root_test:
+		log("dmap must be run with root privileges")
+		sys.exit(root_test)
+
+###############################################################################
+# Name: verify_vdev
+# Args: None
+# Desc: replaces /usr/lib/udev/rules.d/68-vdev.rules and /usr/lib/udev/vdev_id_45drives
+#       with the versions stored in /opt/45drives/tools/ This will ensure
+#       that if the user installs/updates zfs AFTER running dmap that we still have the
+#       required udev rules in place.
+#
+###############################################################################
+def verify_vdev():
+	udev_dir="/usr/lib/udev"
+	rules_path="/usr/lib/udev/rules.d/68-vdev.rules"
+	script_path="/usr/lib/udev/vdev_id_45drives"
+	rules_copy_path="/opt/45drives/tools/68-vdev.rules"
+	script_copy_path="/opt/45drives/tools/vdev_id_45drives"
+
+	rules_copy_test = os.path.exists(rules_copy_path)
+	script_copy_test = os.path.exists(script_copy_path)
+
+	# Download the required scripts if they are not present in /opt/45drives/tools
+	if not rules_copy_test:
+		log("cannot find " + rules_copy_path)
+		log("Attempting to download required file: 68-vdev.rules")
+		rules_repo="http://images.45drives.com/udev/68-vdev.rules"
+		rv=subprocess.run(["curl","-o",rules_copy_path,rules_repo],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+		if rv:
+			log("error downloading 68-vdev.rules from " + rules_repo)
+		else:
+			rules_copy_test = os.path.exists(rules_copy_path)
+
+	if not script_copy_test:
+		log("cannot find " + script_copy_path)
+		log("Attempting to download required file: vdev_id_45drives")
+		script_repo="http://images.45drives.com/udev/vdev_id_45drives"
+		rv=subprocess.run(["curl","-o",script_copy_path,script_repo],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+		if rv:
+			log("error downloading vdev_id_45drives from " + script_repo)
+		else:
+			script_copy_test = os.path.exists(script_copy_path)
+
+	# check for location of udev rules folder.
+	if not os.path.exists(udev_dir):
+		log("can't find " + udev_dir)
+		udev_dir = "/lib/udev"
+		log("trying " + udev_dir + " instead.")
+		if os.path.exists(udev_dir):
+			rules_path="/lib/udev/rules.d/68-vdev.rules"
+			script_path="/lib/udev/vdev_id_45drives"
+		else:
+			log("unable to locate proper udev rules folder")
+			sys.exit(1)
+
+	# Copy the scripts from /opt/45drives/tools to their proper locations
+	rv=subprocess.run(["cp","-f",rules_copy_path,rules_path],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+	if rv:
+		log("error replacing " + rules_path)	
+
+	rv=subprocess.run(["cp","-f",script_copy_path,script_path],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+	if rv:
+		log("error replacing " + script_path)
+
+	rules_test = os.path.exists(rules_path)
+	script_test = os.path.exists(script_path)
+	script_x_test = os.access(script_path,os.X_OK) if script_test else False
+
+	if udev_dir == "/lib/udev":
+		# we need to modify the rules file to run the script from the proper location
+		log(f"replacing occurances of '/usr/lib/udev' with '{udev_dir}' in {rules_path}")
+		with open(rules_path, 'r') as file :
+			filedata = file.read()
+		filedata = filedata.replace('/usr/lib/udev', udev_dir)
+		with open(rules_path, 'w') as file:
+			file.write(filedata)
+	
+	# make the script executable if it is not already executable. 
+	if not script_x_test:
+		if script_test:
+			rv=subprocess.run(["chmod","+x",script_path],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+			if rv:
+				log("error making " + script_path + " executable")
+			else:
+				script_x_test = os.access(script_path,os.X_OK)
+		else:
+			log("cannot locate " + script_path)
+
+	return rules_test and script_test and script_x_test
+
+
+###############################################################################
+# Name: get_server_info
+# Args: none
+# Desc: Returns a dict read from /etc/45drives/server_info/server_info.json. This file
+#       is created by another python script /opt/45drives/tools/server_identifier. 
+#       which automatically determines which 45Drives server is present. 
+#       and provides us with the necessary data structure tol automatically
+#       alias any server we make (see create_vdev_id())
+###############################################################################
+def get_server_info():
+	try:
+		return_code = subprocess.run(["/opt/45drives/tools/server_identifier"]).returncode
+	except:
+		log("dmap failed to get server information")
+		sys.exit(1)
+	if return_code != 0:
+		log("dmap failed to get server information")
+		sys.exit(1)
+	else:
+		# we should expect that there is a file that we can parse in
+		# /opt/45drives/tools/server_info/server_info.json
+		server = json.load(open("/etc/45drives/server_info/server_info.json","r"))
+		return server
+
+def get_version():
+	version_file_path = "/etc/45drives/server_info/tools_version"
+	if not os.path.exists(version_file_path):
+		return ""
+	else:
+		f = open(version_file_path, "r")
+		version = f.readline()
+		f.close()
+		return version.strip()
+
+def check_jbod_enabled(HBA, server,storcli_paths):
+	command_str = "{pth} /c{ctl} show jbod J".format(pth=storcli_paths["storcli64"],ctl=HBA["Ctl"])
+	storcli = subprocess.Popen(
+		shlex.split(command_str), stdout=subprocess.PIPE, universal_newlines=True)
+	jq_command = "jq '.Controllers[0].\"Response Data\".\"Controller Properties\"[0]'"
+	jq = subprocess.Popen(
+		shlex.split(jq_command), stdin=storcli.stdout, stdout=subprocess.PIPE, universal_newlines=True, stderr=subprocess.STDOUT)
+	jq.wait()
+	jqout,_ = jq.communicate()
+	try:
+		jq_json = json.loads(jqout)
+	except ValueError:
+		log("Error gathering information from storcli64 when trying to determine if JBOD mode is enabled:")
+		log("\tCommand Run: {cm} | {jq}".format(cm=command_str, jq=jq_command))
+		log("\tAction Taken: Assuming that JBOD mode is Not Enabled")
+		return False
+	if jqout != None:
+		return not (jq_json.get("Value","OFF") == "OFF")
+	else:
+		log("Error gathering information from storcli64 when trying to determine if JBOD mode is enabled:")
+		log("\tCommand Run: {cm} | {jq}".format(cm=command_str, jq=jq_command))
+		log("\tAction Taken: Assuming that JBOD mode is Not Enabled")
+		return False
+
+def enable_jbod_mode(enable_jbod_command):
+	jbod_cmd = subprocess.Popen(shlex.split(enable_jbod_command), stdout=subprocess.PIPE, universal_newlines=True,stderr=subprocess.STDOUT)
+	jbod_cmd.wait()
+	jq_jbod_en_filter = "jq '.Controllers[0].\"Response Data\".\"Controller Properties\"[0]'"
+	jq_en_jbod_proc = subprocess.Popen(shlex.split(jq_jbod_en_filter), stdin=jbod_cmd.stdout, stdout=subprocess.PIPE, universal_newlines=True, stderr=subprocess.STDOUT)
+	jq_en_jbod_proc.wait()
+	jq_jbod_en_out,_ = jq_en_jbod_proc.communicate()
+	jbod_en_json = json.loads(jq_jbod_en_out)
+	try:
+		jbod_en_json = json.loads(jq_jbod_en_out)
+		log("\tJBOD: {va}\n".format(va=jbod_en_json.get("Value","OFF")))
+	except ValueError:
+		log("\tCouldn't determine result of running: {en}".format(en=enable_jbod_command))
+		log(jq_jbod_en_out)
+		log("")
+
+def hwraid_map(HBA,server):
+	port_order = {
+		"9361-16i": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15 ],
+		"9361-24i": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19, 20,21,22,23]
+	}
+
+	if HBA["Model"] not in port_order.keys():
+		log("WARNING - Unknown Hardware Raid card encountered:")
+		log("\tCard Information: ")
+		for field in HBA.keys():
+			log("\t\t{fld}: {val}".format(fld=field,val=HBA[field]))
+		return [99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99]
+
+	storcli_paths = {
+        "storcli64": "/opt/45drives/tools/storcli64"
+    }
+	
+	if not check_jbod_enabled(HBA,server,storcli_paths):
+		log("WARNING - Hardware Raid Card must have JBOD Enabled in order to proceed.")
+		log("\tCard Information: ")
+		for field in HBA.keys():
+			log("\t\t{fld}: {val}".format(fld=field,val=HBA[field]))
+		
+		enable_jbod_command = "{pth} /c{cid} set jbod=on J".format(pth=storcli_paths["storcli64"],cid=HBA["Ctl"])
+		log("\tCommand: {cm}".format(cm=enable_jbod_command))
+		
+		global g_enable_jbod
+		if g_enable_jbod:
+			enable_jbod_mode(enable_jbod_command)
+		else:
+			response = input("\tWould you like dmap to enable JBOD mode for this card using this command? (y/n): ")
+			if response in ["y","Y"]:
+				done = False
+				while not done:
+					log("\tWARNING - If you have any RAID Arrays configured already, enabling JBOD mode can compromise your data.")
+					confirm = input("\tConfirm enabling JBOD mode by typing 'CONFIRM' or 'SKIP' to skip enabling JBOD: ")
+					if confirm in ["confirm","CONFIRM"]:
+						done = True
+						enable_jbod_mode(enable_jbod_command)
+					elif confirm in ["skip","SKIP"]:
+						done = True
+						log("\tSkipped the Enable JBOD mode step, Aliases will be created with invalid bus addresses in /etc/vdev_id.conf\n")
+					else:
+						log("\tInvalid entry, Try again..\n")
+
+	storcli = subprocess.Popen(
+		shlex.split("{pth} /c{ctl} show all J".format(pth=storcli_paths["storcli64"],ctl=HBA["Ctl"])), stdout=subprocess.PIPE, universal_newlines=True)
+	jq_command = "jq '.Controllers[0].\"Response Data\".\"JBOD LIST\" | map({PORT: .\"EID:Slt\", DID: .\"DID\"})'"
+	jq = subprocess.Popen(
+		shlex.split(jq_command), stdin=storcli.stdout, stdout=subprocess.PIPE, universal_newlines=True, stderr=subprocess.STDOUT)
+	jqout,_ = jq.communicate()
+	try:
+		jq_json = json.loads(jqout)
+	except ValueError:
+		jq_json = []
+
+	device_id_list = [99,99,99,99, 99,99,99,99, 99,99,99,99, 99,99,99,99, 99,99,99,99, 99,99,99,99]
+
+	for entry in jq_json:
+		index = port_order[HBA["Model"]].index(int(entry.get("PORT","252:99").split(":")[1]))
+		if index != -1:
+			device_id_list[index] = entry.get("DID",99)
+
+
+	alias_style_index_lut = {
+		"F8": [3,2,1,0, 7,6,5,4, 19,18,17,16, 15,14,13,12, 11,10,9,8, 23,22,21,20],
+		"STORINATOR": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19, 20,21,22,23],
+		"STORNADO": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19, 20,21,22,23],
+		"2USTORNADO": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19, 20,21,22,23],
+		"C8": [0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19, 20,21,22,23]
+	}
+
+	alias_ordered_list = []
+	for entry in alias_style_index_lut[server["Alias Style"]]:
+		alias_ordered_list.append(device_id_list[entry])
+
+	return alias_ordered_list
+
+
+def alias_by_path(chassis_size, motherboard_product_name):
+	lut_chassissize_mobo_to_aliases = {
+		"VM2": {
+			"ME03-CE0-000": [
+				("1-1", "pci-0000:42:00.0-nvme-1"),
+				("1-2", "pci-0000:43:00.0-nvme-1")
+			]
+		}
+	}
+
+	if chassis_size not in lut_chassissize_mobo_to_aliases:
+		log(f"/opt/45drives/tools/dmap: !! ERROR !! Alias style 'BYPATH' does not support chassis size '{chassis_size}'")
+		log(f"                          valid chassis sizes: {lut_chassissize_mobo_to_aliases.keys()}")
+		sys.exit(1)
+	if motherboard_product_name not in lut_chassissize_mobo_to_aliases[chassis_size]:
+		log(f"/opt/45drives/tools/dmap: !! ERROR !! Alias style 'BYPATH' with chassis size '{chassis_size}' does not support motherboard '{motherboard_product_name}'")
+		log(f"                          valid product names: {lut_chassissize_mobo_to_aliases[chassis_size].keys()}")
+		sys.exit(1)
+
+	return "\n".join(
+		itertools.starmap(lambda alias, path: f"alias {alias} /dev/disk/by-path/{path}",
+					 lut_chassissize_mobo_to_aliases[chassis_size][motherboard_product_name])) + "\n"
+
+
+###############################################################################
+# Name: create_vdev_id
+# Args: server (dict)
+#    Example of a server dict:
+#{
+#    "Motherboard": {
+#        "Manufacturer": "Supermicro",
+#        "Product Name": "X11DPL-i",
+#        "Serial Number": "WM19AS004505"
+#    },
+#    "HBA": [
+#        {
+#            "Model": "SAS9305-16i",
+#            "Adapter": "SAS3224",
+#            "Bus Address": "0000:d8:00.0",
+#            "Drive Connections": 16,
+#            "Kernel Driver": "mpt3sas",
+#            "PCI Slot": 3
+#        }
+#    ],
+#    "Hybrid": false,
+#    "Serial": "13371337-13-37",
+#    "Model": "Storinator-C8-Turbo",
+#    "Alias Style": "STORINATOR",
+#    "Chassis Size": "C8",
+#    "VM": false,
+#    "Edit Mode": false
+#}
+#
+#    
+# Desc: Using the server dict, we can alias all drives in the appropriate 
+#       order based on the system information. The server dict is read in 
+#       from /etc/45drives/server_info/server_info.json. The phy_order dict is used 
+#       to assign the appropriate physical address. The keys correspond to 
+#       those provided by the "/opt/45drives/tools/storcli64 show" command. 
+#       The "Alias Style" key us used to reference the alias_template dict,
+#       and the chassis size key stored in the 
+#       alias_template[server["Alias Style"]] dict, will give us an array of 
+#       ints used as indexes into the phy_order dict's arrays. 
+###############################################################################
+def create_vdev_id(server):
+	version = get_version()
+	vdev_id_str = "# This file was generated using dmap {v} (/opt/45drives/tools/dmap).\n".format(v=version)
+
+	if server["Alias Style"] == "BYPATH":
+		return vdev_id_str + alias_by_path(server["Chassis Size"], server["Motherboard"]["Product Name"])
+
+	phy_order = {
+		"HBA 9405W-16i" : [9,11,13,15,  8,10,12,14,  1,3,5,7,  0,2,4,6],
+		"HBA 9400-16i" : [9,11,13,15,  8,10,12,14,  1,3,5,7,  0,2,4,6],
+		"SAS9305-16i" : [2,3,1,0,  6,7,5,4,  18,19,17,16,  22,23,21,20],
+		"SAS9305-24i": [2,3,1,0,  6,7,5,4,  18,19,17,16,  22,23,21,20,  10,11,9,8,  14,15,13,12],
+		"AVAGO3108MegaRAID": [25,31,37,43, 26,32,38,44, 27,33,39,45, 28,34,41,46, 29,35,40,47, 30,36,42,48],
+		"9600-24i": [27,28,29,30,31,32,33,34,35,36,37,38,39,41,41,42,43,44,45,46,47,48,49,50],
+		#"9600-16i": [27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42]
+		"9600-16i": [59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74]
+	}
+
+	alias_template = {
+		"H16":{
+			"AV15":[23],
+			"Q30":[15,23],
+			"S45":[15,15,23],
+			"XL60":[15,15,15,23]
+		},
+		"H32":{
+			"Q30":[23,24],
+			"S45":[15,23,24],
+			"XL60":[15,15,23,24]
+		},
+		"STORINATOR":{
+			"AV15":[15],
+			"Q30":[15,15],
+			"S45":[15,15,15],
+			"XL60":[15,15,15,15],
+			"F32":[16,16],
+			"C8":[8],
+			"MI4":[0]
+		},
+		"STORINATORUBM":{
+			"MI4_UBM":[4],
+			"C8_UBM":[8]
+		},
+		"HOMELAB":{
+      		"HL15_BEAST":[23],
+			"HL15":[15],
+			"HL4":[4],
+			"HL8":[4,4]
+		},
+		"PROFESSIONAL":{
+			"PRO15":[15],
+			"PRO4":[4],
+			"PRO8":[4,4]
+		},
+		"STORNADO":{
+			"AV15":[16,16],
+			"F32":[16,16]
+		},
+		"2USTORNADO":{
+			"2U":[16,16]
+		},
+		"F2STORNADO":{
+			"F2":[8,8,8,8],
+			"VM8":[8],
+			"VM16":[8,8],
+			"VM32":[8,8,8]
+		},
+		"AV15-BASE":{
+			"AV15":[0]
+		},
+		"DESTROYINATOR":{
+			"AV15":[15,0,0,0],
+			"Q30":[15,15,0,0],
+			"S45":[15,15,15,0],
+			"XL60":[15,15,15,15]
+		},
+		"F8":{
+			"F8X1":[20],
+			"F8X2":[20,20],
+			"F8X3":[20,20,20]
+		},
+  		"STUDIO":{
+			"STUDIO8":[4,4]
+		},
+		"?":{
+			"?":[0]
+		}
+	}
+
+	# Make sure that the user didn't make any manual edits that can throw dmap.
+	if server["Alias Style"] not in alias_template.keys():
+			log("/opt/45drives/tools/dmap: !! ERROR !! Invalid Alias Style set in /etc/45drives/server_info/server_info.json")
+			log("                          Valid Options are: {o}".format(o=alias_template.keys()))
+			log("                          You can manually edit this file by setting \"Edit Mode\": true")
+			log("                          in /etc/45drives/server_info/server_info.json along with any other parameters")
+			sys.exit(1)
+	elif server["Chassis Size"] not in alias_template[server["Alias Style"]].keys():
+			log("/opt/45drives/tools/dmap: !! ERROR !! Invalid Chassis Size and Alias Style combination set in /etc/45drives/server_info/server_info.json")
+			log("                          Valid Chassis Size Options for " + server["Alias Style"] + " are: {o}".format(o=alias_template[server["Alias Style"]].keys()))
+			log("                          You can manually edit this file by setting \"Edit Mode\": true")
+			log("                          in /etc/45drives/server_info/server_info.json along with any other parameters")
+			sys.exit(1)
+
+	log("")
+	# We have a valid combination of alias styles and chassis sizes.
+ 
+ 	# HL15_BEAST: two supported motherboard paths
+	#  - ProArt X870E-CREATOR WIFI: map all 23 via the single HBA (24i)
+	#  - ROMED8-2T: map 1-1..1-15 via HBA (16i), 1-16..1-23 via onboard SATA
+	if server["Alias Style"] == "HOMELAB" and server["Chassis Size"] == "HL15_BEAST":
+		if not server.get("HBA"):
+			log("!! ERROR !! No HBA found for HL15_BEAST")
+			sys.exit(1)
+		mobo_name = server.get("Motherboard", {}).get("Product Name", "")
+		mobo_name_norm = (mobo_name or "").upper()
+		if len(server["HBA"]) > 0 and server["HBA"][0]["Model"] in phy_order and len(phy_order[server["HBA"][0]["Model"]]) >= 24:
+			bus   = server["HBA"][0]["Bus Address"]
+			hba_phy_order = phy_order[server["HBA"][0]["Model"]]
+			beast_phy_order = hba_phy_order[0:15] + [*reversed(hba_phy_order[20:24])] + [*reversed(hba_phy_order[16:20])]
+			for i, p in enumerate(beast_phy_order, start=1):
+				vdev_id_str += f"alias 1-{i} /dev/disk/by-path/pci-{bus}-sas-phy{p}-lun-0\n"
+			return vdev_id_str
+		elif "ROMED8-2T" in mobo_name_norm:
+			# 15 via HBA, last 8 via SATA
+			return alias_hl15_beast_romed8(server, phy_order)
+		else:
+			log("!! ERROR !! Unsupported motherboard / HBA for HL15_BEAST: {mobo}".format(mobo=mobo_name))
+			log("           Supported: ProArt X870E-CREATOR WIFI, ROMED8-2T")
+			sys.exit(1)
+		return vdev_id_str
+
+	if len(server["HBA"]) > 0 and server["Chassis Size"] != "C8" and server["Alias Style"] != "F8":
+		# we have hba cards to inspect/alias
+		for i in range(0,len(server["HBA"])):
+			if server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+				hmap = hwraid_map(server["HBA"][i],server)
+			if server["Chassis Size"] == "MI4":
+				count = 4
+				# If we are here, there are HWRAID cards present, so we can assume Mi4 will see up to 4 drives on the raid card
+			else:
+				count = alias_template[server["Alias Style"]][server["Chassis Size"]][i]
+			for j in range(0,count):
+				if(j>=15 and server["Alias Style"] == "H32" and i==len(alias_template[server["Alias Style"]][server["Chassis Size"]])-2):
+					# We are ailiasing a hybrid 32, which staggers the labels across the 2nd last and last rows.
+					# But, the physical addresses need to increment by 1, while keeping the labels the same.
+					if server["HBA"][i]["Model"] not in ["9600-24i", "9600-16i","9361-16i","9361-24i"]:
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j+1]
+								)
+							)
+					elif server["HBA"][i]["Model"] in ["9600-24i", "9600-16i"]:
+						# alias 9600 style cards
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j+1]
+								)
+							)
+					elif server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+						# Hardware Raid card -> we need to get unique device map from storcli64
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=hmap[j+1]
+								)
+							)
+						if hmap[j+1] == 99:
+							log("WARNING - Drive missing from slot {i}-{j}. Insert disk into slot {i}-{j} and try running dmap again.".format(i=i+1,j=j+1))
+				else:
+					if server["HBA"][i]["Model"] not in ["9600-24i", "9600-16i", "9361-16i", "9361-24i"]:
+						# The default case for ailiasing hba cards.
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+								)
+							)
+					elif server["HBA"][i]["Model"] in ["9600-24i", "9600-16i"]:
+						# alias 9600 style cards
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+								)
+							)
+					elif server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+						# Hardware Raid card -> we need to get unique device map from storcli64
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=hmap[j]
+								)
+							)
+						if hmap[j] == 99:
+							log("WARNING - Drive missing from slot {i}-{j}. Insert disk into slot {i}-{j} and try running dmap again.".format(i=i+1,j=j+1))
+					
+	elif len(server["HBA"]) > 0 and server["Chassis Size"] == "C8":
+		# we have a C8 server, order needs to be 1-1, 1-2, 1-3, 1-4,       2-1,2-2,2-3,2-4
+		for i in range(0,len(server["HBA"])):
+			if server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+				hmap = hwraid_map(server["HBA"][i],server)
+			count = alias_template[server["Alias Style"]][server["Chassis Size"]][i]
+			for j in range(0,count):
+				if server["HBA"][i]["Model"] not in ["9600-24i", "9600-16i","9361-16i","9361-24i"]:
+					# The default case for ailiasing hba cards.
+					vdev_id_str += (
+						"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+							i=1+(j//4),j=(j%4)+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+							)
+						)
+				elif server["HBA"][i]["Model"] in ["9600-24i", "9600-16i"]:
+					# alias 9600 style cards
+					vdev_id_str += (
+						"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+							i=1+(j//4),j=(j%4)+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+							)
+						)
+				elif server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+					# Hardware Raid Card
+					vdev_id_str += (
+						"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+							i=1+(j//4),j=(j%4)+1,addr=server["HBA"][i]["Bus Address"],p=hmap[j]
+							)
+						)
+					if hmap[j] == 99:
+							log("WARNING - Drive missing from slot {i}-{j}. Insert disk into slot {i}-{j} and try running dmap again.".format(i=1+(j//4),j=(j%4)+1))
+
+	elif server["Chassis Size"] == "MI4" and server["Alias Style"] == "STORINATOR":
+		vdev_id_str += alias_mi4(server["Model"],server["OS NAME"],server["OS VERSION_ID"],server["Motherboard"]["Product Name"])
+	elif server["Chassis Size"] == "MI4_UBM" and server["Alias Style"] == "STORINATORUBM":
+		vdev_id_str += alias_mi4_ubm(server["Model"],server["OS NAME"],server["OS VERSION_ID"],server["Motherboard"]["Product Name"])
+	elif server["Alias Style"] == "AV15-BASE":
+		# we are using the AV15-BASE ailiasing scheme.
+		vdev_id_str += alias_av15_base(server["OS NAME"],server["OS VERSION_ID"])
+	elif server["Alias Style"] == "DESTROYINATOR":
+		# we are using the DESTROYINATOR ailiasing scheme.
+		vdev_id_str += alias_destroyinator(server,alias_template,phy_order)
+	elif server["Alias Style"] == "F8":
+		# we are using the DESTROYINATOR ailiasing scheme.
+		vdev_id_str += alias_f8(server,alias_template)
+	elif server["Alias Style"] == "HOMELAB" and server["Chassis Size"] == "HL4":
+		vdev_id_str += alias_hl4()
+	elif server["Alias Style"] == "HOMELAB" and server["Chassis Size"] == "HL8":
+		vdev_id_str += alias_hl8()
+	elif server["Alias Style"] == "PROFESSIONAL" and server["Chassis Size"] == "PRO4":
+		vdev_id_str += alias_pro4()
+	elif server["Alias Style"] == "PROFESSIONAL" and server["Chassis Size"] == "PRO8":
+		vdev_id_str += alias_pro8()
+	elif server["Alias Style"] == "STUDIO" and server["Chassis Size"] == "STUDIO8":
+		vdev_id_str += alias_studio8()
+	elif server["Alias Style"] == "?":
+		# we don't know what kind of server this is. Likely a vm
+		vdev_id_str = None
+
+	return vdev_id_str
+
+def alias_f8(server,alias_template):
+	# Cables are installed into a 24i card with port 5 unused
+	# Order is as follows:
+	# P0 -> X-1 to X-3  (SSDs)
+	# P1 -> X-4 to X-8  (SSDs)
+	# P2 -> X-17 to X-20 (HDDs)
+	# P3 -> X-13 to X-16 (HDDs)
+	# P4 -> X-9 to X-12 (HDDs)
+	# P5 -> UNUSED
+	f8_order = {
+		"SAS9305-24i": [0,1,3,2,  4,5,7,6,  8,9,11,10,  20,21,23,22,  16,17,19,18,    12,13,15,14],
+		"9600-24i": [30,29,28,27, 34,33,32,31, 46,45,44,43,  42,41,41,39,  38,37,36,35,  50,49,48,47]
+	}
+	vdev_id_str = ""
+	for i in range(0,len(server["HBA"])):
+		if server["HBA"][i]["Model"] in ["9361-16i","9361-24i"]:
+			hmap = hwraid_map(server["HBA"][i],server)
+		count = alias_template[server["Alias Style"]][server["Chassis Size"]][i]
+		for j in range(0,count):
+			if server["HBA"][i]["Model"]=="SAS9305-24i":
+				# The default case for ailiasing hba cards.
+				vdev_id_str += (
+					"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+						i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=f8_order[server["HBA"][i]["Model"]][j]
+						)
+					)
+			elif server["HBA"][i]["Model"] in ["9600-24i"]:
+				# alias 9600 style cards, and attempt hardware raid cards with warning. 
+				vdev_id_str += (
+					"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+						i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=f8_order[server["HBA"][i]["Model"]][j]
+						)
+					)
+			elif server["HBA"][i]["Model"] in ["9361-24i"]:			
+				vdev_id_str += (
+					"alias {i}-{j} /dev/disk/by-path/pci-{addr}-scsi-0:0:{p}:0\n".format(
+						i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=hmap[j]
+						)
+					)
+				if hmap[j] == 99:
+					log("WARNING - Drive missing from slot {i}-{j}. Insert disk into slot {i}-{j} and try running dmap again.".format(i=i+1,j=j+1))
+	log("\n")
+	return vdev_id_str
+
+def alias_destroyinator(server,alias_template,phy_order):
+	vdev_id_str = ""
+	bus_address_sata = None
+	bus_address_sata_2 = None
+	bus_address_sas = None
+	ata_suffix = ""
+	if server["Motherboard"]["Manufacturer"] == "Giga Computing":
+		## If giga boards, use standard mapping
+		if len(server["HBA"]) > 0:
+			# we have hba cards to inspect/alias
+			for i in range(0,len(server["HBA"])):
+				count = alias_template[server["Alias Style"]][server["Chassis Size"]][i]
+				print(count)
+				for j in range(0,count):
+					if server["HBA"][i]["Model"] not in ["9600-24i", "9600-16i", "9361-16i", "9361-24i"]:
+						# The default case for ailiasing hba cards.
+						vdev_id_str += (
+							"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+								i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+								)
+							)
+		return vdev_id_str
+	else:
+		for i in range(0,len(server["HBA"])):
+			count = alias_template[server["Alias Style"]][server["Chassis Size"]][i]
+			for j in range(0,count):
+				# The default case for ailiasing hba cards.
+				vdev_id_str += (
+					"alias {i}-{j} /dev/disk/by-path/pci-{addr}-sas-phy{p}-lun-0\n".format(
+						i=i+1,j=j+1,addr=server["HBA"][i]["Bus Address"],p=phy_order[server["HBA"][i]["Model"]][j]
+						)
+					)
+		if server["OS NAME"] == "CentOS Linux" and server["OS VERSION_ID"] == "7":
+			ata_suffix = ".0"
+
+		try:
+			lspci_result = subprocess.Popen(["lspci"], stdout=subprocess.PIPE,
+				universal_newlines=True).stdout
+		except OSError:
+			log("Error executing lspci.")
+			sys.exit(1)
+
+		for line in lspci_result:
+			regex_sata = re.search("(\w\w:\w\w.\w).*Intel.*SATA Controller",line)
+			if regex_sata != None and bus_address_sata == None:
+				bus_address_sata = "0000:"+regex_sata.group(1)
+			elif regex_sata != None and bus_address_sata_2 == None:
+				bus_address_sata_2 = "0000:"+regex_sata.group(1)
+			if bus_address_sata != None and bus_address_sata_2 != None:
+				break
+
+		if bus_address_sata != None :
+			for i in range(0,7):
+				#alias the drives connected to the on board sata sata connectors
+				#if there are two sata controllers, we want to only use the first one to alias the first of the last 7 drives in the unit
+				#otherwise we use the second sata controller for the remaining 6 drives. 
+				vdev_id_str += "alias {final_row}-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(
+					final_row=len(server["HBA"]),
+					drive=i+9,addr=bus_address_sata if i == 0 or bus_address_sata_2 == None else bus_address_sata_2,
+					i=i+2,
+					s=ata_suffix
+				)
+		else:
+			log("Error aliasing DESTROYINATOR")
+			sys.exit(1)
+		return vdev_id_str
+
+
+###############################################################################
+# Helper Function to Get SATA Controller PCI Addresses
+###############################################################################
+def get_sata_pci_addresses():
+    try:
+		# Run the lshw command to get storage information
+        lshw_result = subprocess.Popen(
+            ["lshw", "-class", "storage"], stdout=subprocess.PIPE, universal_newlines=True
+        ).stdout
+    except Exception as e:
+        print(f"Error running lshw: {e}")
+        return []
+
+    pci_addresses = []
+    is_sata_block = False
+    block_lines = []
+
+    for line in lshw_result:
+        line = line.strip()
+        if line.startswith("*-"):  # Start of a new block
+            if is_sata_block:
+                # Process the previous block
+                for l in block_lines:
+                    match = re.search(r"bus info:\s+pci@(\S+)", l)
+                    if match:
+                        pci_addresses.append(match.group(1))
+                        break  # Only one address per block
+            # Reset for the new block
+            block_lines = [line]
+            is_sata_block = False
+        else:
+            block_lines.append(line)
+            if "description: SATA controller" in line:
+                is_sata_block = True
+
+    # Catch last block
+    if is_sata_block:
+        for l in block_lines:
+            match = re.search(r"bus info:\s+pci@(\S+)", l)
+            if match:
+                pci_addresses.append(match.group(1))
+
+    return pci_addresses
+
+
+
+###############################################################################
+# Name: alias_hl4
+# Args: 
+# Desc: 
+###############################################################################
+def alias_hl4():
+    vdev_id_str = ""
+    hl4_order = [4, 3, 2, 1]
+
+    # Fetch SATA addresses dynamically
+    sata_addresses = get_sata_pci_addresses()
+
+    if len(sata_addresses) < 1:
+        raise RuntimeError("No SATA controllers found for HL4 configuration.")
+
+    # Use the first SATA controller for HL4
+    primary_sata_address = sata_addresses[0]
+
+    for i in range(len(hl4_order)):
+        vdev_id_str += (
+            "alias 1-{s} /dev/disk/by-path/pci-{addr}-ata-{p}\n".format(
+                s=i + 1, p=hl4_order[i], addr=primary_sata_address
+            )
+        )
+
+    return vdev_id_str
+
+
+###############################################################################
+# Name: alias_hl8
+# Args: 
+# Desc: 
+###############################################################################
+def alias_hl8():
+    log("alias_hl8 called")
+    vdev_id_str = ""
+    hl4_order = [4, 3, 2, 1]
+
+    # Fetch SATA addresses dynamically
+    sata_addresses = get_sata_pci_addresses()
+
+    if len(sata_addresses) < 2:
+        raise RuntimeError("Insufficient SATA controllers found for HL8 configuration.")
+
+    # Use the first two SATA controllers for HL8
+    primary_sata_address = sata_addresses[0]
+    secondary_sata_address = sata_addresses[1]
+
+    for i in range(len(hl4_order)):
+        vdev_id_str += (
+            "alias 1-{s} /dev/disk/by-path/pci-{addr}-ata-{p}\n".format(
+                s=i + 1, p=hl4_order[i], addr=primary_sata_address
+            )
+        )
+
+    for i in range(len(hl4_order)):
+        vdev_id_str += (
+            "alias 2-{s} /dev/disk/by-path/pci-{addr}-ata-{p}\n".format(
+                s=i + 1, p=hl4_order[i], addr=secondary_sata_address
+            )
+        )
+
+    return vdev_id_str
+
+
+###############################################################################
+# Helper: list existing /dev/disk/by-path entries for a SATA controller
+# - Dedupes ".0" variants (prefers the base "-ata-N" if both exist)
+# - Returns a list of full paths sorted by numeric port (ascending)
+###############################################################################
+def list_ata_port_paths(pci_addr):
+    pattern = f"/dev/disk/by-path/pci-{pci_addr}-ata-*"
+    paths = glob.glob(pattern)
+    # Keep only names that end with -ata-N or -ata-N.0 and extract N
+    rx = re.compile(rf"/dev/disk/by-path/pci-{re.escape(pci_addr)}-ata-(\d+)(?:\.0)?$")
+    best_by_port = {}
+    for p in paths:
+        m = rx.match(p)
+        if not m:
+            continue
+        n = int(m.group(1))
+        # Prefer base link without ".0" when both exist
+        if n not in best_by_port:
+            best_by_port[n] = p
+        else:
+            if best_by_port[n].endswith(".0") and not p.endswith(".0"):
+                best_by_port[n] = p
+    # Sort by port number
+    return [best_by_port[n] for n in sorted(best_by_port)]
+
+
+###############################################################################
+# Name: alias_hl15_beast_romed8
+# Args: server, phy_order
+# Desc: HL15_BEAST mapping for ROMED8-2T:
+#       - First 15 drives on the single HBA (deterministic SAS phy order)
+#       - Last 8 drives (16..23) on onboard SATA discovered from actual by-path
+# Extra:
+#   - Warns/exits if no SSDs are detected on onboard SATA (cannot infer block)
+#   - Detects the base block (1–4 or 5–8) from the first SSD it sees and
+#     applies that block to BOTH controllers.
+###############################################################################
+def alias_hl15_beast_romed8(server, phy_order):
+	if not server.get("HBA"):
+		log("!! ERROR !! No HBA found for HL15_BEAST (ROMED8-2T path)")
+		sys.exit(1)
+	hba = server["HBA"][0]
+	model = hba.get("Model", "")
+	bus   = hba.get("Bus Address", "")
+
+	if model not in ["HBA 9400-16i"]:
+		log("!! ERROR !! Unexpected HBA model for HL15_BEAST (ROMED8-2T path): {m}".format(m=model))
+		sys.exit(1)
+	if model not in phy_order:
+		log("!! ERROR !! Unknown HBA model '{m}' for HL15_BEAST (ROMED8-2T path)".format(m=model))
+		sys.exit(1)
+		
+	vdev_id_str = ""
+	# 1) First 15 bays via HBA
+	for j in range(15):
+		p = phy_order[model][j]
+		vdev_id_str += "alias 1-{idx} /dev/disk/by-path/pci-{addr}-sas-phy{phy}-lun-0\n".format(
+			idx=j+1, addr=bus, phy=p)
+
+	# 2) Last 8 bays via onboard SATA (two controllers)
+	sata_addrs = get_sata_pci_addresses()
+	if len(sata_addrs) < 2:
+		log("!! ERROR !! Expected at least two SATA controllers on ROMED8-2T, found {n}".format(n=len(sata_addrs)))
+		sys.exit(1)
+
+	sata0, sata1 = sata_addrs[0], sata_addrs[1]
+
+	# Discover real by-path suffixes for each controller
+	sata0_paths = list_ata_port_paths(sata0)
+	sata1_paths = list_ata_port_paths(sata1)
+
+	# At least 1 SSD required overall so we can detect the global block (1–4 or 5–8)
+	combined = sata0_paths + sata1_paths
+	if not combined:
+		log("!! WARNING !! At least 1 SSD must be installed on the onboard SATA to auto-detect port block (1–4 vs 5–8). None found.")
+		sys.exit(1)
+
+	# Determine the block from the first detected SSD path
+	m = re.search(r"-ata-(\d+)(?:\.0)?$", combined[0])
+	if not m:
+		log("!! ERROR !! Unable to parse ATA port from first detected path: {p}".format(p=combined[0]))
+		sys.exit(1)
+	first_n = int(m.group(1))
+	base = 1 if 1 <= first_n <= 4 else 5
+	port_range = range(base, base + 4)
+
+	if server["Motherboard"]["Product Name"] == "ROMED8-2T":
+		# not /BCM
+		# flip order of sata addresses and ports
+		# need to check with ROMED8-2T/BCM if ports also need to be flipped
+		sata0, sata1 = sata1, sata0
+		port_range = [*reversed(port_range)]
+
+	for i, port in enumerate(port_range, start=16):
+		vdev_id_str += f"alias 1-{i} /dev/disk/by-path/pci-{sata0}-ata-{port}\n"
+
+	for i, port in enumerate(port_range, start=20):
+		vdev_id_str += f"alias 1-{i} /dev/disk/by-path/pci-{sata1}-ata-{port}\n"
+
+	return vdev_id_str
+
+###############################################################################
+# Name: alias_pro4
+# Args: 
+# Desc: 
+###############################################################################
+def alias_pro4():
+	vdev_id_str = ""
+	pro4_order = [4,3,2,1]
+
+	for i in range(0,len(pro4_order)):
+		vdev_id_str += (
+			"alias 1-{s} /dev/disk/by-path/pci-0000:00:17.0-ata-{p}\n".format(
+				s=i+1,p=pro4_order[i]
+			)
+		)
+
+	return vdev_id_str
+
+
+###############################################################################
+# Name: alias_pro8
+# Args: 
+# Desc: 
+###############################################################################
+def alias_pro8():
+	vdev_id_str = ""
+	pro8_order1 = [4,3,2,1]
+	pro8_order2 = [8,7,6,5]
+
+	for i in range(0,len(pro8_order1)):
+		vdev_id_str += (
+			"alias 1-{s} /dev/disk/by-path/pci-0000:00:17.0-ata-{p}\n".format(
+				s=i+1,p=pro8_order1[i]
+			)
+		)
+
+	for i in range(0,len(pro8_order2)):
+		vdev_id_str += (
+			"alias 2-{s} /dev/disk/by-path/pci-0000:00:17.0-ata-{p}\n".format(
+				s=i+1,p=pro8_order2[i]
+			)
+		)
+
+	return vdev_id_str
+
+
+###############################################################################
+# Name: alias_studio8
+# Args: 
+# Desc: 
+###############################################################################
+def alias_studio8():
+	vdev_id_str = ""
+	studio8_order1 = [1,2,3,4]
+	studio8_order2 = [5,6,7,8]
+
+	for i in range(0,len(studio8_order1)):
+		vdev_id_str += (
+			"alias 1-{s} /dev/disk/by-path/pci-0000:00:17.0-ata-{p}\n".format(
+				s=i+1,p=studio8_order1[i]
+			)
+		)
+
+	for i in range(0,len(studio8_order2)):
+		vdev_id_str += (
+			"alias 2-{s} /dev/disk/by-path/pci-0000:00:17.0-ata-{p}\n".format(
+				s=i+1,p=studio8_order2[i]
+			)
+		)
+
+	return vdev_id_str
+
+
+###############################################################################
+# Name: alias_av15_base
+# Args: none
+# Desc: returns a string to place within vdev_id.conf that will
+#       alias drives in an av15 base model. The av15 base model does not 
+#       use any hba cards. It instead uses two on board SAS connectors (1-1 to 1-8)
+#       and 7 sata connectors (1-9 to 1-15). Using the output of lspci, we 
+#       obtain the required bus addresses and generate the appropriate 
+#       lines within the vdev_id.conf string. 
+###############################################################################
+def alias_av15_base(os_name,os_version_id):
+	vdev_id_str = ""
+	bus_address_sata = None
+	bus_address_sas = None
+	ata_suffix = ""
+
+	if os_name == "CentOS Linux" and os_version_id == "7":
+		ata_suffix = ".0"
+
+	try:
+		lspci_result = subprocess.Popen(["lspci"], stdout=subprocess.PIPE,
+			universal_newlines=True).stdout
+	except OSError:
+		log("Error executing lspci.")
+		sys.exit(1)
+
+	for line in lspci_result:
+		regex_sata = re.search("(\w\w:\w\w.\w).*Intel.*SATA Controller",line)
+		regex_sas = re.search("(\w\w:\w\w.\w).*SAS3008",line)
+		if regex_sata != None:
+			bus_address_sata = "0000:"+regex_sata.group(1)
+		if regex_sas != None:
+			bus_address_sas = "0000:"+regex_sas.group(1)
+		if bus_address_sata != None and bus_address_sas != None:
+			break
+
+	if bus_address_sata != None and bus_address_sas != None:
+		for i in range(0,8):
+			#alias the drives connected to the on board sas connectors
+			vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-sas-phy{i}-lun-0\n".format(drive=i+1,addr=bus_address_sas,i=i)
+		for i in range(0,7):
+			#alias the drives connected to the on board sata sata connectors
+			vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(drive=i+9,addr=bus_address_sata,i=i+2,s=ata_suffix)
+	else:
+		log("Error aliasing AV15-BASE")
+		sys.exit(1)
+	return vdev_id_str
+
+###############################################################################
+# Name: alias_mi4_ubm
+# Args: model
+# Desc: The mi4 servers do not use HBA cards and must alias the on-board sata
+#       ports. This function is for teh UBM capable versions of the Mi4 that are using teh onboard controllers instead of the 9600 HBA
+###############################################################################
+def alias_mi4_ubm(model,os_name,os_version_id,mobo_model):
+	vdev_id_str = ""
+	bus_address_sata = None
+
+	if mobo_model in ["ME03-CE0-000"]:
+		vdev_id_str += "alias 1-1 /dev/disk/by-path/pci-0000:02:00.0-ata-5\n"
+		vdev_id_str += "alias 1-2 /dev/disk/by-path/pci-0000:02:00.0-ata-6\n"
+		vdev_id_str += "alias 1-3 /dev/disk/by-path/pci-0000:02:00.0-ata-7\n"
+		vdev_id_str += "alias 1-4 /dev/disk/by-path/pci-0000:02:00.0-ata-8\n"
+	
+	if mobo_model in ["MS03-6L0-000"]:
+		vdev_id_str += "alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1\n"
+		vdev_id_str += "alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2\n"
+		vdev_id_str += "alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3\n"
+		vdev_id_str += "alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4\n"
+	
+	return vdev_id_str
+
+###############################################################################
+# Name: alias_mi4
+# Args: model
+# Desc: The mi4 servers do not use HBA cards and must alias the on-board sata
+#       ports. These ports start at ISATA-2 as the boot drives are using 
+#       ISATA-0 and ISATA-1. This means that we need 1-1 to use "...-ata-3".
+###############################################################################
+def alias_mi4(model,os_name,os_version_id,mobo_model):
+	vdev_id_str = ""
+	bus_address_sata = None
+
+	ata_suffix = ""
+	if os_name == "CentOS Linux" and os_version_id == "7":
+		ata_suffix = ".0"
+
+	try:
+		lspci_result = subprocess.Popen(["lspci"], stdout=subprocess.PIPE,
+			universal_newlines=True).stdout
+	except OSError:
+		log("Error executing lspci.")
+		sys.exit(1)
+
+	if mobo_model in ["H11SSL-i","H11SSL-I"]:
+		# H11SSL-i has different sata controller. It also has 3, so need to specify 
+		# a hard coded bus address. 
+		bus_address_sata = "0000:42:00.2"
+		for i in range(0,4):
+			#alias the drives connected to the on board sata sata connectors
+			vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(drive=i+1,addr=bus_address_sata,i=i+5,s=ata_suffix)
+	elif mobo_model in ["H12SSL-i","H12SSL-I"]:
+		# H11SSL-i has different sata controller. It also has 3, so need to specify 
+		# a hard coded bus address. 
+		bus_address_sata = "0000:48:00.0"
+		for i in range(0,4):
+			#alias the drives connected to the on board sata sata connectors
+			vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(drive=i+1,addr=bus_address_sata,i=i+3,s=ata_suffix)
+	elif mobo_model in ["X11SPi-TF"]:
+		# The X11SPi-TF would use the S-SATA ports for the boot drives, so it starts at the first I-SATA port. 1,2,3 and 4 are used here. 
+		# a hard coded bus address. 
+		bus_address_sata = "0000:00:17.0"
+		for i in range(0,4):
+			#alias the drives connected to the on board sata sata connectors
+			vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(drive=i+1,addr=bus_address_sata,i=i+1,s=ata_suffix)
+	elif mobo_model in ["ROMED8-2T"]:
+		# this is the AMD board made by ASRock Rack. It staggers two sata controllers.
+		# these correspond to the on board mini sas hd connectors for sata_2, sata_3, sata_4, sata_5 using a 4 port fan out cable each. 
+		vdev_id_str += "alias 1-1 /dev/disk/by-path/pci-0000:49:00.0-ata-7\n"
+		vdev_id_str += "alias 1-2 /dev/disk/by-path/pci-0000:49:00.0-ata-8\n"
+		vdev_id_str += "alias 1-3 /dev/disk/by-path/pci-0000:48:00.0-ata-8\n"
+		vdev_id_str += "alias 1-4 /dev/disk/by-path/pci-0000:48:00.0-ata-5\n"
+	elif mobo_model in ["MS03-6L0-000"]:
+		vdev_id_str += "alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1\n"
+		vdev_id_str += "alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2\n"
+		vdev_id_str += "alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3\n"
+		vdev_id_str += "alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4\n"
+	elif mobo_model in ["ME03-CE0-000"]:
+		vdev_id_str += "alias 1-1 /dev/disk/by-path/pci-0000:02:00.0-ata-5\n"
+		vdev_id_str += "alias 1-2 /dev/disk/by-path/pci-0000:02:00.0-ata-6\n"
+		vdev_id_str += "alias 1-3 /dev/disk/by-path/pci-0000:02:00.0-ata-7\n"
+		vdev_id_str += "alias 1-4 /dev/disk/by-path/pci-0000:02:00.0-ata-8\n"
+	else:
+		for line in lspci_result:
+			regex_sata = re.search("(\w\w:\w\w.\w).*Intel.*\sSATA Controller",line)
+			if regex_sata != None:
+				bus_address_sata = "0000:"+regex_sata.group(1)
+			if bus_address_sata != None:
+				break
+
+		if bus_address_sata != None:
+			for i in range(0,4):
+				#alias the drives connected to the on board sata sata connectors
+				vdev_id_str += "alias 1-{drive} /dev/disk/by-path/pci-{addr}-ata-{i}{s}\n".format(drive=i+1,addr=bus_address_sata,i=i+3,s=ata_suffix)
+		else:
+			log("Error aliasing " + model)
+			sys.exit(1)
+	return vdev_id_str
+
+###############################################################################
+# Name: warn_hwraid
+# Args: server
+# Desc: outputs a warning to user about potential for inaccurate aliases.
+###############################################################################
+def warn_hwraid(server):
+	hba_cards = server.get("HBA",[])
+	if not hba_cards:
+		return
+	
+	for card in hba_cards:
+		if card.get("Model","") in ["9361-16i","9361-24i"]:
+			log("\nWARNING - Hardware RAID card detected.")
+			log("Device paths are subject to change on reboot. ")
+			log("\tHardware RAID Card Information:")
+			for key in card.keys():
+				log("\t\t{k}: {v}".format(k=key,v=card[key]))
+			
+		
+
+
+###############################################################################
+# Name: main (dmap)
+# Args: (see parser)
+# Desc: generates vdev_id.conf
+###############################################################################
+def main():
+	# ensure that script has been run with root privilages
+	check_root()
+	parser = OptionParser()
+	parser.add_option("-m","--no-udev",action="store_false",dest="trigger_udev",default=True,help="Creates map but doesnt trigger udev rules")
+	parser.add_option("-s","--size",action="store",dest="sz",default=None,help="Specify chassis size")
+	parser.add_option("-q","--quiet",action="store_true",dest="quiet",default=False,help="Quiet Mode")
+	parser.add_option("-r","--reset-map",action="store_true",dest="reset_map",default=False,help="Resets the drive map")
+	parser.add_option("-J","--jbod",action="store_true",dest="enable_jbod",default=False,help="Automatically enable JBOD mode when prompted.")
+	(options, args) = parser.parse_args()
+
+	# apply the quiet flag to the global variable
+	global g_quiet
+	g_quiet = options.quiet
+
+	global g_enable_jbod
+	g_enable_jbod = options.enable_jbod
+
+	# verify that vdev is configured
+	if not verify_vdev():
+		log("Invalid vdev configuration: run alias_setup.sh")
+		sys.exit(1)
+
+	# get the path variables required to determine config path and device path
+	conf_path, dev_path = get_path_variables()
+	
+	# erase existing config file and reset map if specified by user (-r)
+	if options.reset_map:
+		reset_map(conf_path)
+
+	server = get_server_info()
+
+	warn_hwraid(server)
+
+	# check to see if server is capable of auto aliasing
+	if server.get("Auto Alias",False):
+		log("Server model {sm} is eligible for automatic device aliasing via udev rules.".format(sm=server["Model"]))
+		log("dmap will not modify /etc/vdev_id.conf when it is created automatically by udev rules.")
+		#trigger udev
+		if options.trigger_udev:
+			log("Removing ubm map key directory to fix potential aliasing issues with auto-aliasing. (/var/cache/45drives/ubm)")
+			shutil.rmtree("/var/cache/45drives/ubm",ignore_errors = True)
+			reload_udev()
+			trigger_udev()
+		sys.exit(0)
+
+	vdev_id_conf = create_vdev_id(server)
+
+	if vdev_id_conf == None:
+		# we don't want to create the vdev_id.conf file or trigger udev
+		log("/opt/tools/45drives/dmap:     Unable to determine hardware configuration, drive mapping (modifications to /etc/vdev_id.conf) skipped. ")
+		if options.trigger_udev:
+			log("/opt/tools/45drives/dmap:     Unable to determine hardware configuration, udevadm trigger skipped. ")
+		sys.exit(0)
+
+	# write file to disk
+	f = open(conf_path + "/vdev_id.conf","w")
+	f.write(vdev_id_conf)
+	f.close()
+
+	#trigger udev
+	if options.trigger_udev:
+		reload_udev()
+		trigger_udev()
+
+	#log config file to stdout
+	log("--------------------------------------------------------------------------------")
+	log(conf_path + "/vdev_id.conf:")
+	log("--------------------------------------------------------------------------------")
+	log(vdev_id_conf)
+
+if __name__ == "__main__":
+	main()

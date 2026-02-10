@@ -1,0 +1,84 @@
+{
+    "schema_version": "45D_AP_V2.0",
+    "name": "45drives-tools",
+    "title": "45drives-tools",
+    "description": "cli tools for 45Drives server products",
+    "version": "4.0.32",
+    "build_number": "1",
+    "stable": true,
+    "author": "Brett Kelly <bkelly@45drives.com>",
+    "git_url": "https://github.com/45Drives/ceph-ansible-45d",
+    "license": "GPL-3.0+",
+    "defaults": {
+        "change_urgency": "medium"
+    },
+    "architecture": {
+        "rocky": "x86_64",
+        "debian": "amd64",
+        "ubuntu": "amd64"
+    },
+    "dependencies": {
+        "ubuntu_common": [
+            "ipmitool",
+            "jq",
+            "smartmontools (>= 7.0 )",
+            "dmidecode",
+            "python3",
+            "pciutils",
+            "hdparm",
+            "udev",
+            "lsscsi",
+            "python3-pyudev"
+        ],
+        "rocky_common": [
+            "ipmitool",
+            "jq",
+            "smartmontools > 7.0",
+            "dmidecode",
+            "python3",
+            "pciutils",
+            "hdparm",
+            "lsscsi",
+            "python3-pyudev"
+        ]
+    },
+    "builds": [
+        {
+            "group": "ubuntu",
+            "os_name": "ubuntu-focal",
+            "image": "ci.cr.45d.io/ci/simple/ubuntu-focal:1"
+        },
+        {
+            "group": "ubuntu",
+            "os_name": "ubuntu-jammy",
+            "image": "ci.cr.45d.io/ci/simple/ubuntu-jammy:1"
+        },
+        {
+            "group": "rocky",
+            "os_name": "rocky-el8",
+            "image": "ci.cr.45d.io/ci/simple/rocky-el8:1"
+        },
+        {
+            "group": "rocky",
+            "os_name": "rocky-el9",
+            "image": "ci.cr.45d.io/ci/simple/rocky-el9:1"
+        },
+        {
+            "group": "debian",
+            "os_name": "debian-bookworm",
+            "image": "ci.cr.45d.io/ci/simple/ubuntu-jammy:1"
+        }
+    ],
+    "repos": [
+        "community",
+        "enterprise"
+    ],
+    "changelog": {
+        "urgency": "medium",
+        "version": "4.0.32",
+        "build_number": "1",
+        "date": null,
+        "packager": "Brett Kelly <bkelly@45drives.com>",
+        "changes": []
+    }
+}

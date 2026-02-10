@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+
+import sys
+import re
+import subprocess
+import math
+from optparse import OptionParser
+
+###############################################################################
+# Name: get_attribute
+# Args: path to directory
+# Desc: executes getfattr to get ceph attribute and returns as string
+###############################################################################
+def get_attribute(path, attribute):
+	try:
+		child = subprocess.Popen(["getfattr", "-n", attribute, path],
+			stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+	except OSError:
+		print("Error executing getfattr. Is xattr installed?")
+		sys.exit(1)
+	if child.wait() != 0:
+		return "?"
+	output_string = child.stdout.read()
+	attribute_re = attribute.replace(".", "\.")
+	search = re.search(f"^{attribute_re}=\"([^\"]+)\"$", output_string, re.MULTILINE)
+	if search:
+		return search.group(1)
+	return "?"
+
+###############################################################################
+# Name: display_attributes
+# Args: path to directory, bool for human readble
+# Desc: calls get_attribute for each attribute and prints output
+###############################################################################
+def display_attributes(path, human_readable):
+	attributes = [
+		("Entries", "ceph.dir.entries", False),
+		("Files", "ceph.dir.files", False),
+		("Directories", "ceph.dir.subdirs", False),
+		("Recursive Entries", "ceph.dir.rentries", False),
+		("Recursive Files", "ceph.dir.rfiles", False),
+		("Recursive Directories", "ceph.dir.rsubdirs", False),
+		("Total Size", "ceph.dir.rbytes", True),
+		("File Quota", "ceph.quota.max_files", False),
+		("Size Quota", "ceph.quota.max_bytes", True)
+	]
+	print(path, ":")
+	for attr in attributes:
+		value = get_attribute(path, attr[1])
+		if attr[2] and human_readable:
+			value = format_bytes(int(value))
+		print((attr[0] + ":").ljust(24), value)
+
+################################################################################
+# Name: format_bytes
+# Args: integer value in bytes
+# Desc: formats size_bytes in SI base units and returns as string
+################################################################################
+def format_bytes(size_bytes):
+	if size_bytes == 0:
+		return "0 B"
+	size_name = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+	i = int(math.floor(math.log(size_bytes, 1024)))
+	p = math.pow(1024, i)
+	s = round(size_bytes / p, 2)
+	return "%s %s" % (s, size_name[i])
+
+###############################################################################
+# Name: main (cephfs-dir-stats)
+# Args: (see parser)
+# Desc: lists recursive ceph stats of specified directory
+###############################################################################
+def main():
+	parser = OptionParser()
+	parser.add_option("-H", "--human-readable", dest="human_readable", default=False, help="format bytes to human readble")
+	(options, args) = parser.parse_args()
+	if len(args) == 0:
+		args = ["."]
+	for arg in args:
+		display_attributes(arg, options.human_readable)
+
+if __name__ == "__main__":
+	main()

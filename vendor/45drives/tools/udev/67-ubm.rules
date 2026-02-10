@@ -1,0 +1,36 @@
+#
+# /lib/udev/rules.d/67-ubm.rules
+#
+# udev rule definitions for Universal Backplane Management via Broadcom 9600 series HBA
+#
+# part of 45drives-tools
+#
+# Authors
+# Josh Boudreau <jboudreau@45drives.com>
+
+################################
+# Disk rules
+################################
+# if slot attribute is exposed in sysfs (using patched mpi3mr driver), assign to ENV{SLOT_NUM} to avoid running storcli2 for every device
+SUBSYSTEMS=="scsi", DRIVERS=="sd", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk|partition", ATTRS{slot}=="?*", ENV{SLOT_NUM}="$attr{slot}"
+# fill in remaining ENV variables with ubm/id_disk (SLOT_NUM if missing, SLOT_NAME, UBM_MAP_KEY)
+SUBSYSTEMS=="scsi", DRIVERS=="sd", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk|partition", IMPORT{program}="/opt/45drives/ubm/id_disk %k"
+
+# DISK_HANDLED_BY_UBM environment variable will make udev skip rules in 68-vdev.rules
+ACTION=="add|change", ENV{SUBSYSTEM}=="block", ENV{SLOT_NUM}=="?*", ENV{SLOT_NAME}=="?*", ENV{DISK_HANDLED_BY_UBM}="1"
+
+KERNEL=="?*", ENV{SUBSYSTEM}=="block", ENV{DEVTYPE}=="disk", ENV{SLOT_NAME}=="?*", SYMLINK+="disk/by-vdev/$env{SLOT_NAME}", SYMLINK+="$env{SLOT_NAME}"
+KERNEL=="?*", ENV{SUBSYSTEM}=="block", ENV{DEVTYPE}=="disk", ENV{SLOT_NUM}=="?*", SYMLINK+="disk/by-slot-number/$env{SLOT_NUM}"
+KERNEL=="?*", ENV{SUBSYSTEM}=="block", ENV{DEVTYPE}=="partition", ENV{SLOT_NAME}=="?*", SYMLINK+="disk/by-vdev/$env{SLOT_NAME}-part%n", SYMLINK+="$env{SLOT_NAME}-part%n"
+KERNEL=="?*", ENV{SUBSYSTEM}=="block", ENV{DEVTYPE}=="partition", ENV{SLOT_NUM}=="?*", SYMLINK+="disk/by-slot-number/$env{SLOT_NUM}-part%n"
+
+ENV{DISK_HANDLED_BY_UBM}=="1", KERNEL=="?*", ENV{SUBSYSTEM}=="block", ENV{DEVTYPE}=="disk", ENV{ID_PATH}=="?*", ENV{SLOT_NAME}=="?*", RUN+="/opt/45drives/ubm/patch_vdev_id_conf $env{SLOT_NAME} $env{ID_PATH}"
+
+################################
+# Enclosure (backplane) rules
+################################
+
+ACTION=="remove", GOTO="67-ubm_encl_remove"
+SUBSYSTEM=="enclosure", IMPORT{program}="/opt/45drives/ubm/on_enclosure_add"
+LABEL="67-ubm_encl_remove"
+ACTION=="remove", ENV{SUBSYSTEM}=="enclosure", RUN+="/opt/45drives/ubm/on_enclosure_remove"
