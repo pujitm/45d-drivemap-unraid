@@ -395,7 +395,37 @@ assert_equal(count($stale['rows'] ?? []), count($disk_info['rows'] ?? []), 'api 
 putenv('DRIVEMAP_GENERATOR');
 putenv('DRIVEMAP_REFRESH_SECONDS');
 
-// Scenario 5: dmap port smoke for a non-45d test host.
+// Scenario 5: simulation overlay survives disk_info reads.
+set_common_env($ctx, $fixtures);
+$sim_state_dir = $ctx['out_dir'] . '/dev-sim-backup';
+ensure_dir($sim_state_dir);
+$sim_state_file = $sim_state_dir . '/state.json';
+$map_path = $ctx['out_dir'] . '/drivemap.json';
+$sim_overlay = load_json_file($map_path);
+assert_true(is_array($sim_overlay), 'simulation overlay base drivemap parses as JSON');
+if (is_array($sim_overlay) && isset($sim_overlay['rows'][0][0]) && is_array($sim_overlay['rows'][0][0])) {
+  $sim_overlay['rows'][0][0]['occupied'] = true;
+  $sim_overlay['rows'][0][0]['model-name'] = 'SIMULATED-MODEL';
+  $sim_overlay['rows'][0][0]['serial'] = 'SIM-0001';
+  file_put_contents($map_path, json_encode($sim_overlay, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+file_put_contents(
+  $sim_state_file,
+  json_encode(['diskMode' => 'healthy', 'occupied' => 1], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+);
+putenv('DRIVEMAP_REFRESH_SECONDS=0');
+putenv('DRIVEMAP_GENERATOR=' . $map_script);
+[$sim_overlay_code, $sim_overlay_body] = run_api_action($root, 'disk_info');
+assert_equal($sim_overlay_code, 0, 'api simulation overlay disk_info exits successfully');
+$sim_overlay_rows = json_decode($sim_overlay_body, true);
+assert_true(is_array($sim_overlay_rows) && isset($sim_overlay_rows['rows']) && is_array($sim_overlay_rows['rows']), 'api simulation overlay disk_info returns rows');
+assert_equal($sim_overlay_rows['rows'][0]['model-name'] ?? '', 'SIMULATED-MODEL', 'api simulation overlay preserves model-name');
+assert_equal($sim_overlay_rows['rows'][0]['serial'] ?? '', 'SIM-0001', 'api simulation overlay preserves serial');
+putenv('DRIVEMAP_GENERATOR');
+putenv('DRIVEMAP_REFRESH_SECONDS');
+@unlink($sim_state_file);
+
+// Scenario 6: dmap port smoke for a non-45d test host.
 $ctx_dmap = create_context('dmap');
 $server_json = $ctx_dmap['tmp'] . '/server_info.json';
 $dmap_output = $ctx_dmap['tmp'] . '/vdev_id.conf';
@@ -427,7 +457,7 @@ $aliases = alias_lines_from_file($dmap_output);
 assert_equal(count($aliases), 15, 'dmap alias count for AV15');
 validate_alias_lines($aliases, 'dmap smoke');
 
-// Scenario 6: unsupported alias style should fail safely.
+// Scenario 7: unsupported alias style should fail safely.
 $server['Alias Style'] = 'UNSUPPORTED_STYLE';
 file_put_contents($server_json, json_encode($server, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
 [$invalid_code] = run_php_script($dmap_script, [
@@ -436,7 +466,7 @@ file_put_contents($server_json, json_encode($server, JSON_PRETTY_PRINT | JSON_UN
 ]);
 assert_true($invalid_code !== 0, 'dmap rejects unsupported alias style');
 
-// Scenario 7: optional custom fixture simulation for non-45d host testing.
+// Scenario 8: optional custom fixture simulation for non-45d host testing.
 $fixture_path = resolve_fixture_path((string)$simulate_fixture, $fixtures);
 if (is_string($simulate_fixture) && $simulate_fixture !== '' && $fixture_path === '') {
   assert_true(false, 'simulation fixture path exists: ' . $simulate_fixture);

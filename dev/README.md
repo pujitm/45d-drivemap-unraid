@@ -3,6 +3,35 @@
 Everything in `dev/` is development-only and is not included in the plugin
 `.txz` payload.
 
+## Live Deploy (Direct to Unraid Plugin Dir)
+
+Use `dev/live-deploy.sh` to copy local files directly into the live plugin
+directory on a remote Unraid host:
+
+- default target: `/usr/local/emhttp/plugins/45d-drivemap`
+- default paths: `DriveMap.page`, `plugin.cfg`, `php/`, `scripts/`
+- optional extras: `assets/`, dev pages, or additional repo-relative paths
+
+### Usage
+
+```bash
+dev/live-deploy.sh --host root@192.168.1.201
+dev/live-deploy.sh --host 192.168.1.201 --include-assets
+dev/live-deploy.sh --host root@192.168.1.201 --include-dev-pages
+dev/live-deploy.sh --host root@192.168.1.201 --extra-path DriveMapDevToolsSimulator.page
+```
+
+### Options
+
+- `--method auto|rsync|scp` transfer mode (default `auto`)
+- `--host` accepts either `user@host` or bare `host`/IP (bare defaults to `root@`)
+- `--plugin-dir <path>` override remote plugin directory
+- `--include-assets` include `assets/` in deploy
+- `--include-dev-pages` include `DriveMapDevTools.page` and `DriveMapDevToolsSimulator.page`
+- `--extra-path <path>` add repo-relative path(s) to deploy
+- `--dry-run` print deploy plan without changing remote files
+- `--no-verify` skip remote post-deploy checks
+
 ## Remote Non-45d Harness
 
 Use `dev/remote-test-harness.sh` to copy this repo to a remote host over SSH

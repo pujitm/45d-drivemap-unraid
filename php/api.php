@@ -34,6 +34,7 @@ if ($server_info_override) {
 }
 $server_info_paths[] = '/etc/45drives/server_info/server_info.json';
 $server_info_paths[] = $base_dir . '/server_info.json';
+$simulation_state_file = getenv('DRIVEMAP_SIM_STATE_FILE') ?: ($base_dir . '/dev-sim-backup/state.json');
 
 require_once __DIR__ . '/zfs_info.php';
 
@@ -217,6 +218,16 @@ function ensure_map_data($map_file, $generator, $log_file, $refresh_seconds)
   }
 
   return ['ok' => false, 'error' => 'Drive map data unavailable'];
+}
+
+$simulation_state = load_json($simulation_state_file);
+if (is_array($simulation_state)) {
+  $simulation_disk_mode = strtolower(trim((string)($simulation_state['diskMode'] ?? '')));
+  if ($simulation_disk_mode !== '' && $simulation_disk_mode !== 'passthrough') {
+    // Dev simulator synthetic overlays mutate drivemap.json directly. Skip
+    // read-time regeneration so those overlays survive API reads.
+    $refresh_seconds = 31536000;
+  }
 }
 
 $action = $_REQUEST['action'] ?? 'drivemap';
