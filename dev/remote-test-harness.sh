@@ -18,7 +18,9 @@ Usage:
   dev/remote-test-harness.sh --host user@host [options]
 
 Options:
-  --host <user@host>     Remote SSH target (required)
+  --host <user@host|host>
+                         Remote SSH target (required). If user is omitted,
+                         defaults to root@host.
   --method <auto|rsync|scp>
                          Transfer method (default: auto)
   --remote-dir <path>    Remote workspace path
@@ -80,6 +82,12 @@ if [[ -z "${HOST}" ]]; then
   echo "--host is required" >&2
   usage >&2
   exit 2
+fi
+
+# Unraid shells are typically accessed as root. Accept bare host/IP for
+# convenience by defaulting to root@ when no user is provided.
+if [[ "${HOST}" != *"@"* ]]; then
+  HOST="root@${HOST}"
 fi
 
 if [[ "${METHOD}" != "auto" && "${METHOD}" != "rsync" && "${METHOD}" != "scp" ]]; then

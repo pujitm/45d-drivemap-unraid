@@ -18,12 +18,14 @@ non-45d layouts.
 
 ```bash
 dev/remote-test-harness.sh --host root@192.168.1.201
+dev/remote-test-harness.sh --host 192.168.1.201
 dev/remote-test-harness.sh --host root@192.168.1.201 --simulate-fixture tests/fixtures/vdev_id_h16_q30.conf
 ```
 
 ### Options
 
 - `--method auto|rsync|scp` transfer mode (default `auto`)
+- `--host` accepts either `user@host` or bare `host`/IP (bare defaults to `root@`)
 - `--remote-dir /tmp/...` fixed remote workspace path
 - `--full` run `tests/run.php` when Python is available remotely (falls back to
   smoke suite when Python is missing)
