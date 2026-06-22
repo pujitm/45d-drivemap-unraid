@@ -1,0 +1,9 @@
+  pool: disk1
+ state: ONLINE
+config:
+
+	NAME                 STATE     READ WRITE CKSUM
+	disk1                ONLINE       0     0     0
+	  /dev/mapper/md1p1  ONLINE       0     0     0
+
+errors: No known data errors

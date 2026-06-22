@@ -1,0 +1,5 @@
+                                         capacity     operations     bandwidth
+pool                                   alloc   free   read  write   read  write
+-------------------------------------  -----  -----  -----  -----  -----  -----
+disk1                                  10G    90G    1      2      10M    20M
+  /dev/mapper/md1p1                    10G    90G    1      2      10M    20M

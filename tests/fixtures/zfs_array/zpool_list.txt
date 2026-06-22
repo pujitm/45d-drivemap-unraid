@@ -1,0 +1,2 @@
+disk1	100G	10G	90G	-	-	10%	10%	1.00x	ONLINE	-
+zmirror	200G	20G	180G	-	-	10%	10%	1.00x	ONLINE	-
