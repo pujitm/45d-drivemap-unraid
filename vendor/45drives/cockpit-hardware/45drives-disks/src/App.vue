@@ -776,6 +776,11 @@ export default {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
-  @apply bg-default h-full text-default;
+  /* bg-default / text-default expanded to standard utilities so this does not
+     depend on @apply-ing a custom component class (see src/lib/cockpit-css). */
+  @apply h-full bg-white text-gray-900;
+}
+.dark #app {
+  @apply bg-neutral-800 text-gray-100;
 }
 </style>
