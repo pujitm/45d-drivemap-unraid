@@ -412,10 +412,48 @@ function zpool_status_parse($status_obj, $key, $pool_name, $disk_lookup = [])
 
 function verify_zfs_device_format($status_obj, $pool_name, $disk_lookup = [])
 {
-  // Non-bay devices such as boot, flash, and standalone NVMe pools are valid
-  // ZFS members, but there is no slot to annotate in the drivemap UI.
-  // Keep them in the pool list and skip user-facing warnings.
   $alert = [];
+  $status = $status_obj[$pool_name] ?? '';
+  if ($status === '') {
+    return $alert;
+  }
+
+  preg_match_all('/^\t    (\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m', $status, $matches, PREG_SET_ORDER);
+  $unsupported_disks = [];
+  foreach ($matches as $match) {
+    $name = $match[1];
+    if (preg_match('/^\d+-\d+(?:-part[0-9])?$/', $name)) {
+      continue;
+    }
+
+    $canonical_name = canonical_zfs_disk_name($name, $disk_lookup);
+    if (preg_match('/^\d+-\d+$/', $canonical_name)) {
+      continue;
+    }
+
+    $base_name = basename($name);
+    if (preg_match('/^(boot|flash)(?:-part[0-9])?$/', $base_name) || preg_match('/^nvme[0-9]+n[0-9]+(?:p[0-9]+)?$/', $base_name)) {
+      continue;
+    }
+
+    $unsupported_disks[] = [
+      'name' => $name,
+    ];
+  }
+
+  if (!$unsupported_disks) {
+    return $alert;
+  }
+
+  $alert[] = "ZFS status displayed by this module for zpool '{$pool_name}' may be incomplete.\n\n";
+  $alert[] = "This module can only display zfs status information for devices that are created using a device alias.\n\n";
+  $alert[] = "This can be done using the 45Drives cockpit-zfs-manager package:\nhttps://github.com/45Drives/cockpit-zfs-manager/releases/\n\n";
+  $alert[] = "The following zfs devices do not conform:\n";
+  foreach ($unsupported_disks as $disk) {
+    $alert[] = "\t  {$disk['name']}\n";
+  }
+  $alert[] = "\n";
+
   return $alert;
 }
 

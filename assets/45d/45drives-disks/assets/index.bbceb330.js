@@ -23295,7 +23295,10 @@ function zfsAnimation(p5) {
       return false;
     }
     group.forEach((dsk) => {
-      const dsk_idx = diskLocations2.findIndex((loc) => loc.BAY === dsk.name);
+      const diskName = dsk?.name || dsk;
+      if (diskName === cd)
+        return;
+      const dsk_idx = diskLocations2.findIndex((loc) => loc.BAY === diskName);
       if (dsk_idx < 0 || !diskLocations2[dsk_idx]?.image)
         return;
       const loc = diskLocations2[dsk_idx];
