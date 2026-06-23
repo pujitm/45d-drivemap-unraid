@@ -37168,6 +37168,142 @@ function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
   ]);
 }
 var ZfsSection = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1]]);
+const _sfc_main$storage = {
+  setup() {
+    const currentDisk = inject("currentDisk");
+    const diskInfo = inject("diskInfo");
+    const rows = computed(() => (diskInfo == null ? void 0 : diskInfo.rows) ? diskInfo.rows.flat() : []);
+    const selectedDisk = computed(() => rows.value.find((slot) => (slot == null ? void 0 : slot["bay-id"]) === currentDisk.value));
+    const poolName = computed(() => {
+      var _a;
+      return ((_a = selectedDisk.value) == null ? void 0 : _a["storage-label"]) || "N/A";
+    });
+    const hasPoolInfo = computed(() => {
+      var _a, _b;
+      return ((_a = selectedDisk.value) == null ? void 0 : _a["storage-role"]) === "pool" && !!((_b = selectedDisk.value) == null ? void 0 : _b["storage-label"]);
+    });
+    const poolMembers = computed(() => {
+      if (!hasPoolInfo.value)
+        return [];
+      return rows.value.filter((slot) => {
+        var _a, _b;
+        return (slot == null ? void 0 : slot["storage-role"]) === "pool" && (slot == null ? void 0 : slot["storage-label"]) === ((_b = (_a = selectedDisk.value) == null ? void 0 : _a["storage-label"]) != null ? _b : "");
+      });
+    });
+    const firstValue = (key) => {
+      var _a;
+      const match = poolMembers.value.find((slot) => slot == null ? void 0 : slot[key]);
+      return ((_a = match == null ? void 0 : match[key]) != null ? _a : "N/A");
+    };
+    const uniqueValues = (key) => Array.from(new Set(poolMembers.value.map((slot) => slot == null ? void 0 : slot[key]).filter(Boolean)));
+    const filesystem = computed(() => {
+      const values = uniqueValues("fs-type");
+      return values.length ? values.join(", ") : "N/A";
+    });
+    const status = computed(() => firstValue("fs-status"));
+    const mountpoint = computed(() => firstValue("fs-mountpoint"));
+    const slotSummary = computed(() => {
+      const values = poolMembers.value.map((slot) => slot == null ? void 0 : slot["bay-id"]).filter(Boolean);
+      return values.length ? values.join(", ") : "N/A";
+    });
+    const deviceSummary = computed(() => {
+      const values = poolMembers.value.map((slot) => (slot == null ? void 0 : slot.dev) || (slot == null ? void 0 : slot["dev-by-path"])).filter(Boolean);
+      return values.length ? values.join(", ") : "N/A";
+    });
+    return {
+      hasPoolInfo,
+      poolName,
+      poolMembers,
+      filesystem,
+      status,
+      mountpoint,
+      slotSummary,
+      deviceSummary
+    };
+  }
+};
+const _hoisted_storage_1 = {
+  id: "storageCard",
+  class: "card grow flex flex-col"
+};
+const _hoisted_storage_2 = /* @__PURE__ */ createBaseVNode("div", { class: "card-header" }, [
+  /* @__PURE__ */ createBaseVNode("h3", { class: "text-header text-default" }, "Pool Information")
+], -1);
+const _hoisted_storage_3 = {
+  key: 0,
+  class: "card-body overflow-y-auto grow-0 flex flex-wrap gap-12"
+};
+const _hoisted_storage_4 = { class: "grow-0 2xl:grow grid grid-cols-3 items-stretch gap-y-3 gap-x-5" };
+const _hoisted_storage_5 = /* @__PURE__ */ createBaseVNode("div", { class: "text-label text-default col-span-3 border-b-[1px] shrink-0 border-neutral-200 dark:border-neutral-700" }, " Pool ", -1);
+const _hoisted_storage_6 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "name", -1);
+const _hoisted_storage_7 = { class: "text-sm break-words" };
+const _hoisted_storage_8 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "filesystem", -1);
+const _hoisted_storage_9 = { class: "text-sm break-words" };
+const _hoisted_storage_10 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "status", -1);
+const _hoisted_storage_11 = { class: "text-sm break-words" };
+const _hoisted_storage_12 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "mountpoint", -1);
+const _hoisted_storage_13 = { class: "text-sm break-words" };
+const _hoisted_storage_14 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "members", -1);
+const _hoisted_storage_15 = { class: "text-sm break-words" };
+const _hoisted_storage_16 = { class: "grow-0 2xl:grow grid grid-cols-3 items-stretch gap-y-3 gap-x-5" };
+const _hoisted_storage_17 = /* @__PURE__ */ createBaseVNode("div", { class: "text-label text-default col-span-3 border-b-[1px] shrink-0 border-neutral-200 dark:border-neutral-700" }, " Devices ", -1);
+const _hoisted_storage_18 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "slots", -1);
+const _hoisted_storage_19 = { class: "text-sm break-words" };
+const _hoisted_storage_20 = { class: "col-span-2" };
+const _hoisted_storage_21 = /* @__PURE__ */ createBaseVNode("div", { class: "text-sm text-muted" }, "devices", -1);
+const _hoisted_storage_22 = { class: "text-sm break-words" };
+const _hoisted_storage_23 = {
+  key: 1,
+  class: "card-body grow flex justify-center items-center"
+};
+const _hoisted_storage_24 = /* @__PURE__ */ createBaseVNode("div", { class: "p-5 bg-accent rounded-lg" }, [
+  /* @__PURE__ */ createBaseVNode("span", { class: "text-muted" }, "Click on a pool disk for more detail.")
+], -1);
+const _hoisted_storage_25 = [
+  _hoisted_storage_24
+];
+function _sfc_render$storage(_ctx, _cache, $props, $setup, $data, $options) {
+  return openBlock(), createElementBlock("div", _hoisted_storage_1, [
+    _hoisted_storage_2,
+    $setup.hasPoolInfo ? (openBlock(), createElementBlock("div", _hoisted_storage_3, [
+      createBaseVNode("div", _hoisted_storage_4, [
+        _hoisted_storage_5,
+        createBaseVNode("div", null, [
+          _hoisted_storage_6,
+          createBaseVNode("div", _hoisted_storage_7, toDisplayString($setup.poolName), 1)
+        ]),
+        createBaseVNode("div", null, [
+          _hoisted_storage_8,
+          createBaseVNode("div", _hoisted_storage_9, toDisplayString($setup.filesystem), 1)
+        ]),
+        createBaseVNode("div", null, [
+          _hoisted_storage_10,
+          createBaseVNode("div", _hoisted_storage_11, toDisplayString($setup.status), 1)
+        ]),
+        createBaseVNode("div", null, [
+          _hoisted_storage_12,
+          createBaseVNode("div", _hoisted_storage_13, toDisplayString($setup.mountpoint), 1)
+        ]),
+        createBaseVNode("div", null, [
+          _hoisted_storage_14,
+          createBaseVNode("div", _hoisted_storage_15, toDisplayString($setup.poolMembers.length), 1)
+        ])
+      ]),
+      createBaseVNode("div", _hoisted_storage_16, [
+        _hoisted_storage_17,
+        createBaseVNode("div", null, [
+          _hoisted_storage_18,
+          createBaseVNode("div", _hoisted_storage_19, toDisplayString($setup.slotSummary), 1)
+        ]),
+        createBaseVNode("div", _hoisted_storage_20, [
+          _hoisted_storage_21,
+          createBaseVNode("div", _hoisted_storage_22, toDisplayString($setup.deviceSummary), 1)
+        ])
+      ])
+    ])) : (openBlock(), createElementBlock("div", _hoisted_storage_23, _hoisted_storage_25))
+  ]);
+}
+var StorageSection = /* @__PURE__ */ _export_sfc(_sfc_main$storage, [["render", _sfc_render$storage]]);
 var App_vue_vue_type_style_index_0_lang = "";
 const _sfc_main = {
   name: "App",
@@ -37179,6 +37315,7 @@ const _sfc_main = {
     CanvasSection,
     ErrorMessage,
     ZfsSection,
+    StorageSection,
     Notifications
   },
   props: { notificationFIFO: FIFO },
@@ -37203,9 +37340,20 @@ const _sfc_main = {
       }
       return Object.prototype.hasOwnProperty.call(zfsInfo.zfs_disks, currentDisk.value);
     });
+    const selectedDiskHasStoragePool = computed(() => {
+      if (!currentDisk.value || !diskInfo.rows) {
+        return false;
+      }
+      const slot = diskInfo.rows.flat().find((disk) => (disk == null ? void 0 : disk["bay-id"]) === currentDisk.value);
+      return (slot == null ? void 0 : slot["storage-role"]) === "pool" && !!(slot == null ? void 0 : slot["storage-label"]) && !selectedDiskHasZfs.value;
+    });
+    const selectedDiskHasDetailCard = computed(() => selectedDiskHasZfs.value || selectedDiskHasStoragePool.value);
     const activePageLayout = computed(() => {
-      if (selectedDiskHasZfs.value) {
+      if (selectedDiskHasDetailCard.value && pageLayout.value.includes("Z")) {
         return pageLayout.value;
+      }
+      if (selectedDiskHasDetailCard.value) {
+        return `${pageLayout.value.replace("Z", "")}Z`;
       }
       return pageLayout.value.replace("Z", "");
     });
@@ -37613,6 +37761,8 @@ const _sfc_main = {
       pageLayout,
       activePageLayout,
       selectedDiskHasZfs,
+      selectedDiskHasStoragePool,
+      selectedDiskHasDetailCard,
       notifications
     };
   }
@@ -37659,6 +37809,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_CanvasSection = resolveComponent("CanvasSection");
   const _component_DiskSection = resolveComponent("DiskSection");
   const _component_ZfsSection = resolveComponent("ZfsSection");
+  const _component_StorageSection = resolveComponent("StorageSection");
   const _component_ServerSection = resolveComponent("ServerSection");
   return openBlock(), createElementBlock(Fragment, null, [
     createVNode(_component_Notifications, {
@@ -37704,7 +37855,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
           }, [
             $setup.preloadChecks.serverInfo.finished && $setup.preloadChecks.diskInfo.finished && !$setup.preloadChecks.serverInfo.failed && !$setup.preloadChecks.diskInfo.failed && $setup.preloadChecks.pageStatus.ready ? (openBlock(), createBlock(_component_DiskSection, { key: 0 })) : createCommentVNode("", true)
           ], 2)) : createCommentVNode("", true),
-          $setup.preloadChecks.zfs.finished && !$setup.preloadChecks.zfs.failed && !$setup.preloadChecks.serverInfo.failed && !$setup.preloadChecks.diskInfo.failed && $setup.selectedDiskHasZfs && $setup.preloadChecks.pageStatus.ready ? (openBlock(), createElementBlock("div", {
+          $setup.preloadChecks.zfs.finished && !$setup.preloadChecks.serverInfo.failed && !$setup.preloadChecks.diskInfo.failed && $setup.selectedDiskHasDetailCard && $setup.preloadChecks.pageStatus.ready ? (openBlock(), createElementBlock("div", {
             key: 1,
             class: normalizeClass([
               $setup.activePageLayout === "AZ" ? "lg:col-span-3" : "",
@@ -37713,7 +37864,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
               "grow grid gap-well col-span-6"
             ])
           }, [
-            $setup.preloadChecks.zfs.finished && !$setup.preloadChecks.zfs.failed ? (openBlock(), createBlock(_component_ZfsSection, { key: 0 })) : createCommentVNode("", true)
+            $setup.selectedDiskHasZfs && $setup.preloadChecks.zfs.finished && !$setup.preloadChecks.zfs.failed ? (openBlock(), createBlock(_component_ZfsSection, { key: 0 })) : $setup.selectedDiskHasStoragePool ? (openBlock(), createBlock(_component_StorageSection, { key: 1 })) : createCommentVNode("", true)
           ], 2)) : createCommentVNode("", true),
           createBaseVNode("div", _hoisted_5, [
             $setup.preloadChecks.serverInfo.finished && $setup.preloadChecks.lsdev.finished ? (openBlock(), createBlock(_component_ServerSection, {
