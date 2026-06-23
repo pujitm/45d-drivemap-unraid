@@ -5011,9 +5011,6 @@ const _sfc_main$A = {
     } else {
       document.documentElement.classList.remove("dark");
     }
-    const home = () => {
-      cockpit.location.go("/");
-    };
     watch(() => darkMode.value, (darkMode2, oldDarkMode) => {
       localStorage.setItem("color-theme", darkMode2 ? "dark" : "light");
       if (darkMode2) {
@@ -5023,8 +5020,7 @@ const _sfc_main$A = {
       }
     }, { lazy: false });
     return {
-      darkMode,
-      home
+      darkMode
     };
   },
   components: {
@@ -5056,8 +5052,7 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
       ])
     ]),
     createBaseVNode("h1", {
-      class: "text-red-800 dark:text-white text-2xl cursor-pointer grow-0 text-center",
-      onClick: _cache[0] || (_cache[0] = (...args) => $setup.home && $setup.home(...args))
+      class: "text-red-800 dark:text-white text-2xl grow-0 text-center"
     }, toDisplayString($props.moduleName), 1),
     createBaseVNode("div", _hoisted_6$8, [
       createBaseVNode("button", {
