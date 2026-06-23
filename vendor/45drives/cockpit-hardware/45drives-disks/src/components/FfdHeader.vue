@@ -28,8 +28,7 @@ If not, see <https://www.gnu.org/licenses/>.
 			</h1>
 		</div>
 		<h1
-			class="text-red-800 dark:text-white text-2xl cursor-pointer grow-0 text-center"
-			@click="home"
+			class="text-red-800 dark:text-white text-2xl grow-0 text-center"
 		>{{ moduleName }}</h1>
 		<div class="flex basis-32 justify-end grow shrink-0">
 			<button
@@ -74,9 +73,6 @@ export default {
 		} else {
 			document.documentElement.classList.remove("dark");
 		}
-		const home = () => {
-			cockpit.location.go('/');
-		};
 		watch(() => darkMode.value, (darkMode, oldDarkMode) => {
 			localStorage.setItem("color-theme", darkMode ? "dark" : "light");
 			if (darkMode) {
@@ -87,7 +83,6 @@ export default {
 		}, { lazy: false });
 		return {
 			darkMode,
-			home,
 		};
 	},
 	components: {
