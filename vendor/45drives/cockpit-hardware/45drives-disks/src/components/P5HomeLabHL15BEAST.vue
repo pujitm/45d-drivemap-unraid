@@ -139,6 +139,7 @@
             );
             if (index == -1) return;
             diskLocations[index].occupied = slot.occupied;
+            diskLocations[index].standby = slot["power-mode"] === "STANDBY";
             diskLocations[index].image = getDiskImage(
               slot.occupied,
               slot["model-name"],
@@ -161,6 +162,7 @@
             );
             if (index == -1) return;
             diskLocations[index].occupied = slot.occupied;
+            diskLocations[index].standby = slot["power-mode"] === "STANDBY";
             diskLocations[index].image = getDiskImage(
               slot.occupied,
               slot["model-name"],
@@ -276,6 +278,7 @@
             );
             if (index === -1) return;
             diskLocations[index].occupied = slot.occupied;
+            diskLocations[index].standby = slot["power-mode"] === "STANDBY";
             diskLocations[index].image = getDiskImage(
               slot.occupied,
               slot["model-name"],
@@ -310,6 +313,11 @@
               const w = loc.image.width * 1.11;
               const h = loc.image.height * 1.11;
               p5.image(loc.image, loc.x, loc.y, w, h);
+              if (loc.standby) {
+                p5.noStroke();
+                p5.fill(255, 165, 0, 80);
+                p5.rect(loc.x, loc.y, w, h - 14);
+              }
               if (assets.loadingFlag) {
                 p5.animateLoading(
                   loc.x,
