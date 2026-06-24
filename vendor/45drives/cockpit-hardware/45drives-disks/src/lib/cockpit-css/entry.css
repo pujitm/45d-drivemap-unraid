@@ -1,0 +1,13 @@
+/*
+ * Vendored reconstruction of @45drives/cockpit-css (compiled entrypoint).
+ *
+ * main.js imports the package's `dist/index.css`, which is aliased here. The
+ * full Tailwind entrypoint and the 45Drives design-token layer live in
+ * ./index.css, which App.vue imports and which is therefore emitted globally
+ * for the whole app. Tailwind's @layer directives must sit alongside the
+ * @tailwind directives in one file, and emitting that file from both entry
+ * points doubles the generated CSS, so this entry is intentionally empty and
+ * only keeps the import path valid.
+ *
+ * See ./index.css for the token definitions and provenance.
+ */
