@@ -40,6 +40,23 @@ Removing the plugin cleans up:
 
 ## Development
 
+### Disk-map frontend (vendored from 45Drives)
+
+The disk-map UI is built and maintained by **45Drives**, not by this project.
+We vendor their prebuilt output and ship it as-is:
+
+- The shipped bundle lives in `assets/45d/45drives-disks/` (a 45Drives Cockpit
+  module release snapshot). We do not rebuild or maintain it here.
+- `vendor/45drives/cockpit-hardware/` is a reference snapshot of the upstream
+  source for context only. Do not run the upstream `make` build to produce the
+  shipped bundle — it fans out to sibling plugins (`45drives-motherboard`,
+  `45drives-system`) that depend on 45Drives' private GitHub Packages registry
+  and will fail with `401 Unauthorized`.
+- To pull in disk-map UI changes, take an updated release snapshot from 45Drives
+  rather than building it yourself.
+
+### Plugin
+
 - Release process details: `RELEASING.md`
 - Changelog management: `CHANGELOG.md` + `knope.toml`
 - Test suite:
