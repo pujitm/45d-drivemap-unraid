@@ -162,6 +162,13 @@
 						<span v-else>N/A</span>
 					</div>
 				</div>
+				<div class="grid grid-cols-1 self-start py-1 md:py-2 px-2">
+					<div class="text-sm text-muted">Power Mode</div>
+					<div class="text-sm break-words">
+						<span v-if="diskObj['power-mode']">{{ diskObj['power-mode'] }}</span>
+						<span v-else>N/A</span>
+					</div>
+				</div>
 				<div
 					v-if="hasStorageDetails"
 					class="text-label text-default col-span-2 2xl:col-span-3 border-b-[1px] shrink-0 border-neutral-200 dark:border-neutral-700 mx-2 pt-2"

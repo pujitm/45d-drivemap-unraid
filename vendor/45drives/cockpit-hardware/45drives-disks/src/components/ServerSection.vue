@@ -194,24 +194,15 @@ export default {
 
     const updateDiskSummary = () => {
       if (lsdevJson.rows) {
-        diskCount.value = lsdevJson.rows
+        const occupiedDisks = lsdevJson.rows
           .flat()
-          .filter((slot) => slot.occupied).length;
+          .filter((slot) => slot.occupied);
 
-        // storageCapacity.value =
-        //   diskCount.value > 0
-        //     ? lsdevJson.rows
-        //         .flat()
-        //         .filter((slot) => slot.occupied)
-        //         .map((disk) => getCapacityGiB(disk.capacity))
-        //         .reduce((total, cap) => total + cap)
-        //         .toFixed(2)
-        //     : 0;
+        diskCount.value = occupiedDisks.length;
+
         storageCapacity.value =
           diskCount.value > 0
-            ? lsdevJson.rows
-              .flat()
-              .filter((slot) => slot.occupied)
+            ? occupiedDisks
               .map((disk) => getCapacityGiB(disk.capacity))
               .reduce((total, cap) => total + cap)
             : 0;
@@ -221,23 +212,25 @@ export default {
             ? (storageCapacity.value / 1000).toFixed(2).toString() + " TB"
             : storageCapacity.value.toString() + " GB";
 
+        // Spun-down drives report no temperature; exclude them so the average
+        // reflects only the drives that are actually spun up.
+        const tempReadings = occupiedDisks
+          .map((disk) => Number(disk["temp-c"]?.replace(/[^0-9]/g, "") ?? 0))
+          .filter((temp) => temp > 0);
+
         avgTemp.value =
-          diskCount.value > 0
+          tempReadings.length > 0
             ? (
-                lsdevJson.rows
-                  .flat()
-                  .filter((slot) => slot.occupied)
-                  .map((disk) =>
-                    Number(disk["temp-c"]?.replace(/[^0-9]/g, "") ?? 0)
-                  )
-                  .reduce((total, cap) => total + cap) / Number(diskCount.value)
+                tempReadings.reduce((total, cap) => total + cap) /
+                Number(tempReadings.length)
               ).toFixed(2)
             : 0;
-        
-        if(avgTemp.value === 0){
-          avgTempStr.value = "No Disks Present";
-        }
 
+        if (diskCount.value === 0) {
+          avgTempStr.value = "No Disks Present";
+        } else if (tempReadings.length === 0) {
+          avgTempStr.value = "All drives are spundown";
+        }
       }
     };
 

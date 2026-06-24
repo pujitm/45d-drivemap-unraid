@@ -104,6 +104,7 @@ export default {
                     );
                     if (index == -1) return;
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -127,6 +128,7 @@ export default {
                     );
                     if (index == -1) return;
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -222,6 +224,7 @@ export default {
                         (loc) => loc.BAY === slot["bay-id"]
                     );
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -255,6 +258,11 @@ export default {
                 diskLocations.forEach((loc) => {
                     if (loc.occupied && loc.image) {
                         p5.image(loc.image, loc.x, loc.y, DRAWN_WIDTH, DRAWN_HEIGHT);
+                        if (loc.standby) {
+                            p5.noStroke();
+                            p5.fill(255, 165, 0, 80);
+                            p5.rect(loc.x, loc.y, DRAWN_WIDTH, DRAWN_HEIGHT - 14);
+                        }
                         if (assets.loadingFlag) {
                             p5.animateLoading(
                                 loc.x,
