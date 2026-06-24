@@ -1,0 +1,2 @@
+disk1	10G	90G	10G	/mnt/disk1
+zmirror	20G	180G	20G	/mnt/zmirror

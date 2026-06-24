@@ -73,6 +73,17 @@ function zfs_drivemap_lookup()
         $lookup[$value] = $bay_id;
         $lookup[basename($value)] = $bay_id;
       }
+
+      $storage_label = $slot['storage-label'] ?? '';
+      if (is_string($storage_label) && preg_match('/^disk([0-9]+)$/', $storage_label, $match)) {
+        $lookup[$storage_label] = $bay_id;
+        $lookup['md' . $match[1]] = $bay_id;
+        $lookup['md' . $match[1] . 'p1'] = $bay_id;
+        $lookup['/dev/md' . $match[1]] = $bay_id;
+        $lookup['/dev/md' . $match[1] . 'p1'] = $bay_id;
+        $lookup['/dev/mapper/md' . $match[1]] = $bay_id;
+        $lookup['/dev/mapper/md' . $match[1] . 'p1'] = $bay_id;
+      }
     }
   }
 
@@ -401,53 +412,51 @@ function zpool_status_parse($status_obj, $key, $pool_name, $disk_lookup = [])
 
 function verify_zfs_device_format($status_obj, $pool_name, $disk_lookup = [])
 {
-  // Frontend drive-to-bay mapping relies on "card-drive" aliases (e.g. 1-1).
-  // Emit warnings when pool members do not follow that convention.
   $alert = [];
-  if (!isset($status_obj[$pool_name])) {
+  $status = $status_obj[$pool_name] ?? '';
+  if ($status === '') {
     return $alert;
   }
 
-  $default_pattern = '/^\t    (\d+-\d+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m';
-  $unsupported_pattern = '/^\t    (\S+)(?:-part[0-9])?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m';
-
-  preg_match_all($default_pattern, $status_obj[$pool_name], $default_matches, PREG_SET_ORDER);
-  preg_match_all($unsupported_pattern, $status_obj[$pool_name], $unsupported_matches, PREG_SET_ORDER);
-
-  $default_disks = [];
-  foreach ($default_matches as $match) {
-    $default_disks[] = $match[1];
-  }
-
+  preg_match_all('/^\t(?:  |    )(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m', $status, $matches, PREG_SET_ORDER);
   $unsupported_disks = [];
-  foreach ($unsupported_matches as $match) {
-    $unsupported_disks[] = $match[1];
-  }
-
-  if (count($unsupported_disks) > count($default_disks)) {
-    $filtered = array_values(array_diff($unsupported_disks, $default_disks));
-    $filtered = array_values(array_filter($filtered, function ($name) {
-      return !preg_match('/^(\d+-\d+)(?:-part[0-9])/', $name);
-    }));
-    $filtered = array_values(array_filter($filtered, function ($name) use ($disk_lookup) {
-      return !preg_match('/^\d+-\d+$/', canonical_zfs_disk_name($name, $disk_lookup));
-    }));
-
-    if (!$filtered) {
-      return $alert;
+  foreach ($matches as $match) {
+    $name = $match[1];
+    if (preg_match('/^(mirror|raidz[0-9]?|draid[0-9]?|spare|log|logs|cache|special|dedup)-?[0-9]*$/', $name)) {
+      continue;
     }
 
-    $alert[] = "ZFS status displayed by this module for zpool '$pool_name' may be incomplete.\n\n";
-    $alert[] = "This module can only display zfs status information for devices that are created using a device alias.\n\n";
-    $alert[] = "This can be done using the 45Drives cockpit-zfs-manager package:\nhttps://github.com/45Drives/cockpit-zfs-manager/releases/\n\n";
-    if ($filtered) {
-      $alert[] = "The following zfs devices do not conform:\n";
-      foreach ($filtered as $disk) {
-        $alert[] = "\t  $disk\n";
-      }
+    if (preg_match('/^\d+-\d+(?:-part[0-9]+)?$/', $name)) {
+      continue;
     }
-    $alert[] = "\n";
+
+    $canonical_name = canonical_zfs_disk_name($name, $disk_lookup);
+    if (preg_match('/^\d+-\d+$/', $canonical_name)) {
+      continue;
+    }
+
+    $base_name = basename($name);
+    if (preg_match('/^(boot|flash)(?:-part[0-9]+)?$/', $base_name) || preg_match('/^nvme[0-9]+n[0-9]+(?:p[0-9]+)?$/', $base_name)) {
+      continue;
+    }
+
+    $unsupported_disks[] = [
+      'name' => $name,
+    ];
   }
+
+  if (!$unsupported_disks) {
+    return $alert;
+  }
+
+  $alert[] = "ZFS status displayed by this module for zpool '{$pool_name}' may be incomplete.\n\n";
+  $alert[] = "This module can only display zfs status information for devices that are created using a device alias.\n\n";
+  $alert[] = "This can be done using the 45Drives cockpit-zfs-manager package:\nhttps://github.com/45Drives/cockpit-zfs-manager/releases/\n\n";
+  $alert[] = "The following zfs devices do not conform:\n";
+  foreach ($unsupported_disks as $disk) {
+    $alert[] = "\t  {$disk['name']}\n";
+  }
+  $alert[] = "\n";
 
   return $alert;
 }
@@ -624,6 +633,9 @@ function generate_zfs_info()
     }
     foreach ($pool['vdevs'] as $vdev) {
       foreach ($vdev['disks'] as $disk) {
+        if (!isset($disk['name']) || !preg_match('/^\d+-\d+$/', $disk['name'])) {
+          continue;
+        }
         $disk_entries[$disk['name']] = [
           'zpool_name' => $pool['name'],
           'zpool_used' => $pool['used'] ?? '-',

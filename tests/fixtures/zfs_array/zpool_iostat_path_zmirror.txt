@@ -1,0 +1,7 @@
+                                         capacity     operations     bandwidth
+pool                                   alloc   free   read  write   read  write
+-------------------------------------  -----  -----  -----  -----  -----  -----
+zmirror                                20G    180G   1      2      10M    20M
+  mirror-0                             20G    180G   1      2      10M    20M
+    /dev/nvme1n1p1                     10G    90G    1      2      5M     10M
+    /dev/nvme2n1p1                     10G    90G    1      2      5M     10M

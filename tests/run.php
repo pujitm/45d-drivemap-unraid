@@ -553,7 +553,34 @@ assert_true(isset($zfs_raw_info['zfs_disks']['1-2']), 'raw-device zfs_info maps 
 assert_true(!isset($zfs_raw_info['zfs_disks']['sda1']), 'raw-device zfs_info does not expose raw sda1 key');
 assert_true(empty($zfs_raw_info['warnings']), 'raw-device zfs_info suppresses alias warning when drivemap can resolve devices');
 
+$original_zfs_fixture_dir = getenv('DRIVEMAP_ZFS_FIXTURE_DIR');
+putenv('DRIVEMAP_ZFS_FIXTURE_DIR=' . $fixtures . '/zfs_array');
+try {
+  [$zfs_array_code, $zfs_array_body] = run_api_action($root, 'zfs_info');
+  assert_equal($zfs_array_code, 0, 'zfs_info array-device endpoint exits successfully');
+  $zfs_array_info = json_decode($zfs_array_body, true);
+  assert_true(is_array($zfs_array_info), 'zfs_info array-device endpoint returns JSON');
+  assert_true(isset($zfs_array_info['zfs_disks']['1-1']), 'array-device zfs_info maps md1p1 pool to disk1 bay');
+  assert_equal($zfs_array_info['zfs_disks']['1-1']['zpool_name'] ?? '', 'disk1', 'array-device zfs_info reports disk1 pool on bay 1-1');
+  assert_true(!isset($zfs_array_info['zfs_disks']['/dev/mapper/md1p1']), 'array-device zfs_info does not expose md mapper key');
+  assert_true(!isset($zfs_array_info['zfs_disks']['nvme1n1p1']), 'array-device zfs_info ignores unmapped nvme pool members');
+  assert_true(!isset($zfs_array_info['zfs_disks']['nvme2n1p1']), 'array-device zfs_info ignores second unmapped nvme pool member');
+  assert_true(empty($zfs_array_info['warnings']), 'array-device zfs_info suppresses warning for non-slot zfs devices');
+} finally {
+  if ($original_zfs_fixture_dir === false) {
+    putenv('DRIVEMAP_ZFS_FIXTURE_DIR');
+  } else {
+    putenv('DRIVEMAP_ZFS_FIXTURE_DIR=' . $original_zfs_fixture_dir);
+  }
+}
+
 require_once $root . '/php/zfs_info.php';
+$malformed_alerts = verify_zfs_device_format([
+  'tank' => "\ttank        ONLINE       0     0     0\n\t  mirror-0  ONLINE       0     0     0\n\t    bad-disk  ONLINE       0     0     0\n",
+], 'tank', []);
+assert_true(!empty($malformed_alerts), 'zfs device format warns for unresolved malformed members');
+assert_true(strpos(implode('', $malformed_alerts), 'bad-disk') !== false, 'zfs device format warning names malformed member');
+
 $lookup_refresh_path = $ctx['out_dir'] . '/zfs_lookup_refresh.json';
 file_put_contents($lookup_refresh_path, json_encode([
   'rows' => [[

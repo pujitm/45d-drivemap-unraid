@@ -1,0 +1,11 @@
+  pool: zmirror
+ state: ONLINE
+config:
+
+	NAME         STATE     READ WRITE CKSUM
+	zmirror      ONLINE       0     0     0
+	  mirror-0   ONLINE       0     0     0
+	    nvme1n1p1 ONLINE       0     0     0
+	    nvme2n1p1 ONLINE       0     0     0
+
+errors: No known data errors
