@@ -1,0 +1,164 @@
+/*
+ * Vendored reconstruction of @45drives/cockpit-css.
+ *
+ * The upstream package is published only to 45Drives' private GitHub Packages
+ * registry, so the project could not be built without credentials. This file
+ * reproduces the pieces the app actually relies on:
+ *
+ *   1. The Tailwind entrypoint (@tailwind base/components/utilities) — the app
+ *      has no @tailwind directives of its own; they lived inside cockpit-css.
+ *   2. The 45Drives design-token layer (bg-default, text-default, card, well,
+ *      etc.), with light/dark and responsive variants.
+ *
+ * Token values were recovered from the shipped compiled stylesheet
+ * (assets/45d/45drives-disks/assets/index.c1d0ecce.css) so they match what the
+ * plugin renders today. Authored cleanly with Tailwind @apply rather than
+ * reproducing the legacy build's quirks.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  /* Backgrounds */
+  .bg-default {
+    @apply bg-white dark:bg-neutral-800;
+  }
+  :is(button, a, .btn).bg-default:hover,
+  .bg-default.interactive:hover {
+    @apply bg-neutral-100 dark:bg-neutral-850;
+  }
+  .bg-accent {
+    @apply bg-neutral-100 dark:bg-[#333333];
+  }
+  .bg-plugin-header {
+    @apply bg-white dark:bg-neutral-800;
+  }
+
+  /* Text and icons */
+  .text-default {
+    @apply text-gray-900 dark:text-gray-100;
+  }
+  .text-muted {
+    @apply text-gray-500;
+  }
+  .dark .bg-accent .text-muted,
+  .dark .text-muted.bg-accent {
+    @apply text-gray-400;
+  }
+  .text-secondary {
+    @apply text-slate-500;
+  }
+  :is(button, a, .btn).text-secondary:hover,
+  .text-secondary.interactive:hover {
+    @apply text-slate-600;
+  }
+  .text-primary {
+    @apply text-slate-600;
+  }
+  :is(button, a, .btn).text-primary:hover,
+  .text-primary.interactive:hover {
+    @apply text-slate-700;
+  }
+  .icon-default {
+    @apply text-gray-500;
+  }
+  :is(button, a) > .icon-default:hover,
+  .btn.icon-default:hover,
+  .icon-default.interactive:hover {
+    @apply text-gray-600;
+  }
+  button:disabled > .icon-default {
+    @apply cursor-no-drop text-neutral-400 dark:text-neutral-600;
+  }
+
+  /* Text size and weight */
+  .text-header {
+    @apply text-lg font-semibold;
+  }
+
+  /* Icons */
+  .size-icon {
+    height: 1.25rem;
+    width: auto;
+  }
+  .size-icon-lg {
+    height: 1.75rem;
+    width: auto;
+  }
+
+  /* Divide and border */
+  .divide-default > :not([hidden]) ~ :not([hidden]) {
+    @apply border-neutral-200 dark:border-neutral-700;
+  }
+
+  /* Combination classes */
+  .card {
+    @apply bg-white shadow-md dark:bg-neutral-800 md:shadow-lg;
+  }
+  :is(button, a, .btn).card:hover,
+  .card.interactive:hover {
+    @apply bg-neutral-100 dark:bg-neutral-850;
+  }
+  .card > :not([hidden]) ~ :not([hidden]) {
+    @apply divide-y divide-neutral-200 dark:divide-neutral-700;
+  }
+  .card-body {
+    @apply px-4 py-5 md:px-6;
+  }
+  .card-header {
+    @apply px-4 py-2 md:px-6 md:py-5;
+  }
+  .well {
+    @apply gap-4 bg-neutral-200 p-2 dark:bg-neutral-900 md:p-8;
+  }
+
+  /* Feedback text */
+  .text-label {
+    @apply mb-1 text-sm font-semibold;
+  }
+  .text-danger {
+    @apply text-rose-500 dark:text-rose-700;
+  }
+  :is(button, a, .btn).text-danger:hover,
+  .text-danger.interactive:hover {
+    @apply text-rose-600 dark:text-rose-800;
+  }
+  .text-success {
+    @apply text-green-600 dark:text-green-500;
+  }
+  :is(button, a, .btn).text-success:hover,
+  .text-success.interactive:hover {
+    @apply text-green-700 dark:text-green-600;
+  }
+  .text-warning {
+    @apply text-orange-500;
+  }
+  :is(button, a, .btn).text-warning:hover,
+  .text-warning.interactive:hover {
+    @apply text-orange-600;
+  }
+
+  /* Feedback icons */
+  .icon-success {
+    @apply text-green-500;
+  }
+  .icon-warning {
+    @apply text-yellow-400;
+  }
+  .icon-error {
+    @apply text-red-600;
+  }
+  .icon-info {
+    @apply text-blue-500;
+  }
+
+  /* Spacing */
+  .gap-well {
+    @apply gap-4;
+  }
+  .space-y-content {
+    @apply space-y-4;
+  }
+}

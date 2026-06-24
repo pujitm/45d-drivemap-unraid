@@ -15,6 +15,7 @@ import {
   FIFO,
 } from "@45drives/cockpit-helpers";
 import ZfsSection from "./components/ZfsSection.vue";
+import StorageSection from "./components/StorageSection.vue";
 import Notifications from "./components/Notifications.vue";
 
 export default {
@@ -27,6 +28,7 @@ export default {
     CanvasSection,
     ErrorMessage,
     ZfsSection,
+    StorageSection,
     Notifications,
   },
   props: { notificationFIFO: FIFO },
@@ -55,9 +57,31 @@ export default {
         currentDisk.value
       );
     });
+    const selectedDiskHasStoragePool = computed(() => {
+      if (!currentDisk.value || !diskInfo.rows) {
+        return false;
+      }
+
+      const slot = diskInfo.rows
+        .flat()
+        .find((disk) => disk?.["bay-id"] === currentDisk.value);
+
+      return (
+        slot?.["storage-role"] === "pool" &&
+        !!slot?.["storage-label"] &&
+        !selectedDiskHasZfs.value
+      );
+    });
+    const selectedDiskHasDetailCard = computed(
+      () => selectedDiskHasZfs.value || selectedDiskHasStoragePool.value
+    );
     const activePageLayout = computed(() => {
-      if (selectedDiskHasZfs.value) {
+      if (selectedDiskHasDetailCard.value && pageLayout.value.includes("Z")) {
         return pageLayout.value;
+      }
+
+      if (selectedDiskHasDetailCard.value) {
+        return `${pageLayout.value.replace("Z", "")}Z`;
       }
 
       return pageLayout.value.replace("Z", "");
@@ -586,6 +610,8 @@ export default {
       pageLayout,
       activePageLayout,
       selectedDiskHasZfs,
+      selectedDiskHasStoragePool,
+      selectedDiskHasDetailCard,
       notifications,
     };
   },
@@ -669,10 +695,9 @@ export default {
         <div
           v-if="
             preloadChecks.zfs.finished &&
-            !preloadChecks.zfs.failed &&
             !preloadChecks.serverInfo.failed &&
             !preloadChecks.diskInfo.failed &&
-            selectedDiskHasZfs &&
+            selectedDiskHasDetailCard &&
             preloadChecks.pageStatus.ready
           "
           :class="[
@@ -683,8 +708,9 @@ export default {
           ]"
         >
           <ZfsSection
-            v-if="preloadChecks.zfs.finished && !preloadChecks.zfs.failed"
+            v-if="selectedDiskHasZfs && preloadChecks.zfs.finished && !preloadChecks.zfs.failed"
           />
+          <StorageSection v-else-if="selectedDiskHasStoragePool" />
         </div>
 
         <div class="flex grow flex-col items-stretch gap-well col-span-6">
@@ -776,6 +802,11 @@ export default {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
-  @apply bg-default h-full text-default;
+  /* bg-default / text-default expanded to standard utilities so this does not
+     depend on @apply-ing a custom component class (see src/lib/cockpit-css). */
+  @apply h-full bg-white text-gray-900;
+}
+.dark #app {
+  @apply bg-neutral-800 text-gray-100;
 }
 </style>

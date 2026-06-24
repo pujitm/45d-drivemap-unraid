@@ -62,6 +62,7 @@ export default {
                     const index = diskLocations.findIndex((loc) => loc.BAY === slot["bay-id"]);
                     if (index == -1) return;
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -82,6 +83,7 @@ export default {
                     const index = diskLocations.findIndex((loc) => loc.BAY === slot["bay-id"]);
                     if (index == -1) return;
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -124,6 +126,7 @@ export default {
                     const index = diskLocations.findIndex((loc) => loc.BAY === slot["bay-id"]);
                     if (index === -1) return;
                     diskLocations[index].occupied = slot.occupied;
+                    diskLocations[index].standby = slot["power-mode"] === "STANDBY";
                     diskLocations[index].image = getDiskImage(
                         slot.occupied,
                         slot["model-name"],
@@ -159,6 +162,11 @@ export default {
                         const w = loc.image.width * 2.1;
                         const h = loc.image.height * 2.49;
                         p5.image(loc.image, loc.x, loc.y, w, h);
+                        if (loc.standby) {
+                            p5.noStroke();
+                            p5.fill(255, 165, 0, 80);
+                            p5.rect(loc.x, loc.y, w, h - 14);
+                        }
                         if (assets.loadingFlag) {
                             p5.animateLoading(
                                 loc.x,

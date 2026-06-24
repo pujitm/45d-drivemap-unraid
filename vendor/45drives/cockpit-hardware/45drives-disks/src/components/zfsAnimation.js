@@ -120,6 +120,36 @@ export default function zfsAnimation(p5) {
     return true;
   };
 
+  // Highlight the other members of a disk's storage group. Guards against
+  // members that aren't mapped to a physical bay (non-slot devices), which
+  // previously errored on diskLocations[-1].
+  p5.showStorageGroupPeers = (cd, animationInfo, diskLocations, y_offset = 0) => {
+    const currentDisk = animationInfo?.animation_disks?.[cd];
+    const group = animationInfo?.animation_groups?.[currentDisk?.group] || [];
+    if (!currentDisk || group.length < 2) {
+      return false;
+    }
+    group.forEach((dsk) => {
+      const diskName = dsk?.name || dsk;
+      if (diskName === cd) return;
+      const dsk_idx = diskLocations.findIndex((loc) => loc.BAY === diskName);
+      if (dsk_idx < 0 || !diskLocations[dsk_idx]?.image) return;
+      const loc = diskLocations[dsk_idx];
+      p5.animateZpools(
+        loc.x,
+        loc.y,
+        loc.image.width,
+        loc.image.height + y_offset,
+        p5.zfsAnimationSteps,
+        p5.zfsAnimationIndex,
+        p5.zfsAnimationColors.storage_group.start,
+        p5.zfsAnimationColors.storage_group.end,
+        p5.zfsAnimationDir
+      );
+    });
+    return true;
+  };
+
   p5.showAnimations = (cd, zfsInfo, diskLocations, y_offset = 0) => {
     if (zfsInfo.zfs_installed) {
       //zfs is installed
@@ -210,6 +240,7 @@ export default function zfsAnimation(p5) {
               }
             });
           });
+          p5.showStorageGroupPeers(cd, zfsInfo, diskLocations, y_offset);
           return true;
         }
       }

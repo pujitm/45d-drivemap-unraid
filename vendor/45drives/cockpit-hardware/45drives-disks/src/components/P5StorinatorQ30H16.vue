@@ -438,6 +438,7 @@ export default {
           );
           if(index == -1) return;
           diskLocations[index].occupied = slot.occupied;
+          diskLocations[index].standby = slot["power-mode"] === "STANDBY";
           diskLocations[index].image = getDiskImage(
             slot.occupied,
             slot["model-name"],
@@ -461,6 +462,7 @@ export default {
           );
           if(index == -1) return;
           diskLocations[index].occupied = slot.occupied;
+          diskLocations[index].standby = slot["power-mode"] === "STANDBY";
           diskLocations[index].image = getDiskImage(
             slot.occupied,
             slot["model-name"],
@@ -549,6 +551,7 @@ zfsAnimation(p5);
           );
           if (index === -1) return;
           diskLocations[index].occupied = slot.occupied;
+          diskLocations[index].standby = slot["power-mode"] === "STANDBY";
           diskLocations[index].image = getDiskImage(
             slot.occupied,
             slot["model-name"],
@@ -586,6 +589,11 @@ zfsAnimation(p5);
         diskLocations.forEach((loc) => {
           if (loc.occupied && loc.image) {
             p5.image(loc.image, loc.x, loc.y);
+            if (loc.standby) {
+              p5.noStroke();
+              p5.fill(255, 165, 0, 80);
+              p5.rect(loc.x, loc.y, loc.image.width, loc.image.height - 14);
+            }
             if (assets.loadingFlag) {
               p5.animateLoading(
                 loc.x,
