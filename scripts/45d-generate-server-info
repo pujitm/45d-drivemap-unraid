@@ -307,6 +307,22 @@ function hardware_profile($product_name, $board_name, $hbas)
         'model' => 'Unraid >< 45Homelab X-15',
       ];
     }
+    if ($name === 'ROMED8-2T' && count_hbas_by_connections($hbas, 16) === 1 && count_hbas_by_connections($hbas, 24) === 0) {
+      return [
+        'prefix' => 'HomeLab',
+        'style' => 'HOMELAB',
+        'chassis' => 'HL15',
+        'model' => '45Homelab HL-15 2.0',
+      ];
+    }
+    if ($name === 'X11SPH-NCTF' && count_hbas_by_connections($hbas, 16) === 1 && count_hbas_by_connections($hbas, 24) === 0) {
+      return [
+        'prefix' => 'HomeLab',
+        'style' => 'HOMELAB',
+        'chassis' => 'HL15',
+        'model' => '45Homelab HL-15 1.0',
+      ];
+    }
   }
   return null;
 }
