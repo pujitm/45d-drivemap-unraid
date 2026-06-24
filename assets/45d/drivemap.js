@@ -91,6 +91,21 @@
     if (bay.health) {
       parts.push('Health ' + bay.health);
     }
+    if (bay['storage-role']) {
+      parts.push('Role ' + bay['storage-role']);
+    }
+    if (bay['storage-label']) {
+      parts.push('Pool ' + bay['storage-label']);
+    }
+    if (bay['fs-type']) {
+      parts.push('FS ' + bay['fs-type']);
+    }
+    if (bay['fs-status']) {
+      parts.push('Status ' + bay['fs-status']);
+    }
+    if (bay['fs-mountpoint']) {
+      parts.push('Mount ' + bay['fs-mountpoint']);
+    }
 
     return parts.join(' | ');
   }
