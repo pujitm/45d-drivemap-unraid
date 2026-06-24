@@ -418,11 +418,15 @@ function verify_zfs_device_format($status_obj, $pool_name, $disk_lookup = [])
     return $alert;
   }
 
-  preg_match_all('/^\t    (\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m', $status, $matches, PREG_SET_ORDER);
+  preg_match_all('/^\t(?:  |    )(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+).*/m', $status, $matches, PREG_SET_ORDER);
   $unsupported_disks = [];
   foreach ($matches as $match) {
     $name = $match[1];
-    if (preg_match('/^\d+-\d+(?:-part[0-9])?$/', $name)) {
+    if (preg_match('/^(mirror|raidz[0-9]?|draid[0-9]?|spare|log|logs|cache|special|dedup)-?[0-9]*$/', $name)) {
+      continue;
+    }
+
+    if (preg_match('/^\d+-\d+(?:-part[0-9]+)?$/', $name)) {
       continue;
     }
 
@@ -432,7 +436,7 @@ function verify_zfs_device_format($status_obj, $pool_name, $disk_lookup = [])
     }
 
     $base_name = basename($name);
-    if (preg_match('/^(boot|flash)(?:-part[0-9])?$/', $base_name) || preg_match('/^nvme[0-9]+n[0-9]+(?:p[0-9]+)?$/', $base_name)) {
+    if (preg_match('/^(boot|flash)(?:-part[0-9]+)?$/', $base_name) || preg_match('/^nvme[0-9]+n[0-9]+(?:p[0-9]+)?$/', $base_name)) {
       continue;
     }
 
