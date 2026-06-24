@@ -5,11 +5,19 @@ Everything in `dev/` is development-only and is not included in the plugin
 
 ## Update Vendored 45drives-disks Snapshot
 
-The disk-map UI is built and maintained by **45Drives**; we only vendor their
-prebuilt output under `assets/45d/45drives-disks/`. Use
-`dev/update-45drives-disks.sh` to refresh that snapshot from an upstream
-build — it does **not** build from source (see the note in
-`assets/45d/README.md`).
+The **base** disk-map UI is built by **45Drives**; the shipped bundle under
+`assets/45d/45drives-disks/` is that base **plus Unraid-specific patches**
+(Cockpit API shim, drive standby display, storage context) that upstream does
+not have — see `assets/45d/README.md`. `dev/update-45drives-disks.sh` fetches an
+upstream build as a **starting point**; it does not build from source and does
+not re-apply the Unraid patches.
+
+> ⚠️ **A straight pull regresses Unraid features.** Upstream builds have none of
+> the Unraid patches (verified: v2.8.2 has zero standby/storage markers), so the
+> output of this script is *not shippable on its own* — the patches must be
+> re-applied first. Treat it as the first step of a port, then QA on real
+> hardware. (A version bump is also a re-port, not a merge: upstream switched to
+> the `houston-common` monorepo after v2.5.8.)
 
 45Drives publishes built modules as `.deb`/`.rpm` assets on their GitHub
 releases (`45Drives/cockpit-hardware`); the disk-map module lives inside at
@@ -44,11 +52,11 @@ hash-scheme and bundling changes.
   note (defaults to the release tag when using `--release`)
 - `--dry-run` print the planned changes without modifying the repo
 
-> **Heads up:** 45Drives restructures the module across versions (e.g. v2.8.x
-> externalized p5 as a root `p5.min.js` and changed the asset hash scheme), so a
-> pull can differ substantially from the previous snapshot — it is **not** a
-> drop-in. Always review the diff and **QA on a real Unraid host before
-> shipping** (e.g. `dev/live-deploy.sh --host root@<ip> --include-assets`).
+45Drives also restructures the module across versions (e.g. v2.8.x externalized
+p5 as a root `p5.min.js` and changed the asset hash scheme), so a pull can differ
+substantially from the previous snapshot. Always review the diff and **QA on a
+real Unraid host before shipping** (e.g. `dev/live-deploy.sh --host root@<ip>
+--include-assets`).
 
 ## Live Deploy (Direct to Unraid Plugin Dir)
 
