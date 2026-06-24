@@ -11,28 +11,44 @@ prebuilt output under `assets/45d/45drives-disks/`. Use
 build — it does **not** build from source (see the note in
 `assets/45d/README.md`).
 
-Point it at an already-built upstream module: either a directory (e.g.
-`/usr/share/cockpit/45drives-disks` on a host with `cockpit-45drives-hardware`
-installed) or a tarball of one. The script syncs the module into place, drops
-stale hashed assets, and re-applies the Unraid-specific `index.html` shim
-(Cockpit API → `php/api.php`) from `dev/45drives-disks-index.template.html`
-with the new bundle hashes.
+45Drives publishes built modules as `.deb`/`.rpm` assets on their GitHub
+releases (`45Drives/cockpit-hardware`); the disk-map module lives inside at
+`usr/share/cockpit/45drives-disks/`. Releases before ~v2.6 ship no built
+artifacts.
 
 ```bash
-dev/update-45drives-disks.sh /usr/share/cockpit/45drives-disks --version 2.5.5-1
+# Pull straight from a GitHub release (downloads the .deb, extracts the module).
+# Requires the `gh` CLI (authenticated) and `ar`.
+dev/update-45drives-disks.sh --release v2.8.2
+dev/update-45drives-disks.sh --release latest --dry-run
+
+# Or point at an already-built module: a directory or a tarball of one.
+dev/update-45drives-disks.sh --source /usr/share/cockpit/45drives-disks
 dev/update-45drives-disks.sh ~/Downloads/45drives-disks.txz --dry-run
 ```
 
+The script syncs the module into place, drops stale hashed assets, and
+regenerates `index.html` by **transforming upstream's own `index.html`**: it
+strips the Cockpit-internal loader scripts (`../base1/cockpit.js`,
+`../manifests.js`, `../*/po.js`) that 404 outside Cockpit, and injects the
+Unraid shim (`dev/45drives-disks-cockpit-shim.html`, which routes Cockpit API
+calls to `php/api.php`). Upstream's own asset references — including the entry
+bundle and `p5.min.js` — are preserved as-is, so the tool survives upstream
+hash-scheme and bundling changes.
+
 ### Options
 
-- `--version <ver>` record the release in `assets/45d/README.md`'s provenance note
+- `--release <tag|latest>` pull a build from the 45Drives GitHub releases
+- `--source <dir|tarball>` use a local module directory or tarball instead
+- `--version <ver>` record the release in `assets/45d/README.md`'s provenance
+  note (defaults to the release tag when using `--release`)
 - `--dry-run` print the planned changes without modifying the repo
 
-The committed `index.html` is regenerated from the template, so the only
-Unraid-specific patch stays in one reviewable place. After updating, the bundle
-hashes change and output may differ from the previous snapshot — **QA on a real
-Unraid host before shipping** (e.g. `dev/live-deploy.sh --host root@<ip>
---include-assets`).
+> **Heads up:** 45Drives restructures the module across versions (e.g. v2.8.x
+> externalized p5 as a root `p5.min.js` and changed the asset hash scheme), so a
+> pull can differ substantially from the previous snapshot — it is **not** a
+> drop-in. Always review the diff and **QA on a real Unraid host before
+> shipping** (e.g. `dev/live-deploy.sh --host root@<ip> --include-assets`).
 
 ## Live Deploy (Direct to Unraid Plugin Dir)
 

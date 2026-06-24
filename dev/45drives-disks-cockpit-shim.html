@@ -1,12 +1,9 @@
-<!DOCTYPE html>
-<html lang="en" class="overflow-hidden h-full">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" href="./favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>45Drives - Disks</title>
-    <link rel="stylesheet" href="./assets/__CSS_BUNDLE__">
     <script>
+      // Unraid shim for the vendored 45drives-disks Cockpit module.
+      // Injected into <head> by dev/update-45drives-disks.sh, which also strips
+      // the upstream Cockpit-internal loader scripts (the ones served from
+      // ../base1, ../manifests.js, etc.) that 404 outside Cockpit. Provides a
+      // minimal window.cockpit that routes process calls to php/api.php.
       window.__45dDriveMap = {
         apiBase: "/plugins/45d-drivemap/php/api.php"
       };
@@ -145,10 +142,3 @@
         };
       })();
     </script>
-    <script type="module" crossorigin src="./assets/__JS_BUNDLE__"></script>
-  </head>
-  <body class="overflow-hidden h-full">
-    <div id="app"></div>
-
-  </body>
-</html>
