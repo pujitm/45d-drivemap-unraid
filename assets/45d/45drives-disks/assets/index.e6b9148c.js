@@ -27138,6 +27138,36 @@ function zfsAnimation(p5) {
     });
     return true;
   };
+  p5.showStorageGroupPeers = (cd, animationInfo, diskLocations2, y_offset = 0) => {
+    var _a, _b;
+    const currentDisk = (_a = animationInfo == null ? void 0 : animationInfo.animation_disks) == null ? void 0 : _a[cd];
+    const group = ((_b = animationInfo == null ? void 0 : animationInfo.animation_groups) == null ? void 0 : _b[currentDisk == null ? void 0 : currentDisk.group]) || [];
+    if (!currentDisk || group.length < 2) {
+      return false;
+    }
+    group.forEach((dsk) => {
+      var _a2;
+      const diskName = (dsk == null ? void 0 : dsk.name) || dsk;
+      if (diskName === cd)
+        return;
+      const dsk_idx = diskLocations2.findIndex((loc2) => loc2.BAY === diskName);
+      if (dsk_idx < 0 || !((_a2 = diskLocations2[dsk_idx]) == null ? void 0 : _a2.image))
+        return;
+      const loc = diskLocations2[dsk_idx];
+      p5.animateZpools(
+        loc.x,
+        loc.y,
+        loc.image.width,
+        loc.image.height + y_offset,
+        p5.zfsAnimationSteps,
+        p5.zfsAnimationIndex,
+        p5.zfsAnimationColors.storage_group.start,
+        p5.zfsAnimationColors.storage_group.end,
+        p5.zfsAnimationDir
+      );
+    });
+    return true;
+  };
   p5.showAnimations = (cd, zfsInfo, diskLocations2, y_offset = 0) => {
     if (zfsInfo.zfs_installed) {
       if (Array.isArray(zfsInfo.zpools) && zfsInfo.zfs_disks && zfsInfo.zfs_disks[cd]) {
@@ -27213,6 +27243,7 @@ function zfsAnimation(p5) {
               }
             });
           });
+          p5.showStorageGroupPeers(cd, zfsInfo, diskLocations2, y_offset);
           return true;
         }
       }
