@@ -113,4 +113,52 @@
   .well {
     @apply gap-4 bg-neutral-200 p-2 dark:bg-neutral-900 md:p-8;
   }
+
+  /* Feedback text */
+  .text-label {
+    @apply mb-1 text-sm font-semibold;
+  }
+  .text-danger {
+    @apply text-rose-500 dark:text-rose-700;
+  }
+  :is(button, a, .btn).text-danger:hover,
+  .text-danger.interactive:hover {
+    @apply text-rose-600 dark:text-rose-800;
+  }
+  .text-success {
+    @apply text-green-600 dark:text-green-500;
+  }
+  :is(button, a, .btn).text-success:hover,
+  .text-success.interactive:hover {
+    @apply text-green-700 dark:text-green-600;
+  }
+  .text-warning {
+    @apply text-orange-500;
+  }
+  :is(button, a, .btn).text-warning:hover,
+  .text-warning.interactive:hover {
+    @apply text-orange-600;
+  }
+
+  /* Feedback icons */
+  .icon-success {
+    @apply text-green-500;
+  }
+  .icon-warning {
+    @apply text-yellow-400;
+  }
+  .icon-error {
+    @apply text-red-600;
+  }
+  .icon-info {
+    @apply text-blue-500;
+  }
+
+  /* Spacing */
+  .gap-well {
+    @apply gap-4;
+  }
+  .space-y-content {
+    @apply space-y-4;
+  }
 }
