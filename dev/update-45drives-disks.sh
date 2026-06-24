@@ -133,8 +133,9 @@ fetch_release() {
   local moddir="${mod}${member#.}"
   [[ -d "$moddir" ]] || { echo "error: 45drives-disks not found in $asset" >&2; return 1; }
 
-  # Default the recorded version to the release tag (strip leading v).
-  [[ -z "$VERSION" ]] && VERSION="${tag#v}"
+  # Record the release tag for the parent shell (this function runs in a
+  # command substitution, so plain variable assignments would not propagate).
+  printf '%s' "${tag#v}" > "${WORK_DIR}/release-tag"
   printf '%s\n' "$moddir"
 }
 
@@ -170,6 +171,10 @@ resolve_module_dir() {
 
 if [[ -n "$RELEASE" ]]; then
   MODULE_DIR=$(fetch_release "$RELEASE")
+  # Default the recorded version to the release tag when not given explicitly.
+  if [[ -z "$VERSION" && -f "${WORK_DIR}/release-tag" ]]; then
+    VERSION=$(cat "${WORK_DIR}/release-tag")
+  fi
 else
   MODULE_DIR=$(resolve_module_dir "$SOURCE")
 fi
