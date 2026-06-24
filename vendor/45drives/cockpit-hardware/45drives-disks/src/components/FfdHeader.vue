@@ -59,20 +59,44 @@ export default {
 	setup(props) {
 		const darkMode = props.darkModeInjectionKey ?? ref(true);
 		// When embedded in the Unraid webGUI the plugin runs in a same-origin
-		// iframe whose parent <html> carries Unraid's theme class
-		// (Theme--black / Theme--gray => dark, Theme--white / Theme--azure =>
-		// light). Detect it so the plugin matches Unraid's color mode.
-		function detectUnraidDark() {
+		// iframe. The Unraid shell's <html> (and/or <body>) carries the theme
+		// class set by ThemeHelper::getThemeHtmlClass (Theme--black / Theme--gray
+		// => dark, Theme--white / Theme--azure => light). Match it.
+		function themeDarkFrom(win) {
 			try {
-				const parentDoc = window.parent && window.parent.document;
-				const parentHtml = parentDoc && parentDoc.documentElement;
-				if (parentHtml && parentHtml !== document.documentElement) {
-					const cls = parentHtml.className || "";
-					if (/\bTheme--(black|gray|dark)\b/.test(cls)) return true;
-					if (/\bTheme--(white|azure|light)\b/.test(cls)) return false;
+				const doc = win.document;
+				const cls =
+					(doc.documentElement.className || "") +
+					" " +
+					(doc.body ? doc.body.className : "");
+				if (/\bTheme--(black|gray|dark)\b/.test(cls)) return true;
+				if (/\bTheme--(white|azure|light)\b/.test(cls)) return false;
+			} catch (e) {
+				// cross-origin / unavailable window
+			}
+			return null;
+		}
+		function detectUnraidDark() {
+			// The themed shell may be the direct parent or several frames up, so
+			// walk the parent chain and also check the top window.
+			const wins = [];
+			try {
+				let w = window;
+				for (let i = 0; i < 6 && w.parent && w.parent !== w; i++) {
+					w = w.parent;
+					wins.push(w);
 				}
 			} catch (e) {
-				// Not embedded, or a cross-origin parent: fall back below.
+				// frame access blocked
+			}
+			try {
+				if (window.top && wins.indexOf(window.top) === -1) wins.push(window.top);
+			} catch (e) {
+				// top access blocked
+			}
+			for (let i = 0; i < wins.length; i++) {
+				const r = themeDarkFrom(wins[i]);
+				if (r !== null) return r;
 			}
 			return null;
 		}
