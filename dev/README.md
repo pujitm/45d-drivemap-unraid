@@ -3,6 +3,37 @@
 Everything in `dev/` is development-only and is not included in the plugin
 `.txz` payload.
 
+## Update Vendored 45drives-disks Snapshot
+
+The disk-map UI is built and maintained by **45Drives**; we only vendor their
+prebuilt output under `assets/45d/45drives-disks/`. Use
+`dev/update-45drives-disks.sh` to refresh that snapshot from an upstream
+build — it does **not** build from source (see the note in
+`assets/45d/README.md`).
+
+Point it at an already-built upstream module: either a directory (e.g.
+`/usr/share/cockpit/45drives-disks` on a host with `cockpit-45drives-hardware`
+installed) or a tarball of one. The script syncs the module into place, drops
+stale hashed assets, and re-applies the Unraid-specific `index.html` shim
+(Cockpit API → `php/api.php`) from `dev/45drives-disks-index.template.html`
+with the new bundle hashes.
+
+```bash
+dev/update-45drives-disks.sh /usr/share/cockpit/45drives-disks --version 2.5.5-1
+dev/update-45drives-disks.sh ~/Downloads/45drives-disks.txz --dry-run
+```
+
+### Options
+
+- `--version <ver>` record the release in `assets/45d/README.md`'s provenance note
+- `--dry-run` print the planned changes without modifying the repo
+
+The committed `index.html` is regenerated from the template, so the only
+Unraid-specific patch stays in one reviewable place. After updating, the bundle
+hashes change and output may differ from the previous snapshot — **QA on a real
+Unraid host before shipping** (e.g. `dev/live-deploy.sh --host root@<ip>
+--include-assets`).
+
 ## Live Deploy (Direct to Unraid Plugin Dir)
 
 Use `dev/live-deploy.sh` to copy local files directly into the live plugin
