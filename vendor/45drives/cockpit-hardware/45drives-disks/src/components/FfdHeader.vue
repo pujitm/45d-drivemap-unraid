@@ -28,8 +28,7 @@ If not, see <https://www.gnu.org/licenses/>.
 			</h1>
 		</div>
 		<h1
-			class="text-red-800 dark:text-white text-2xl cursor-pointer grow-0 text-center"
-			@click="home"
+			class="text-red-800 dark:text-white text-2xl grow-0 text-center"
 		>{{ moduleName }}</h1>
 		<div class="flex basis-32 justify-end grow shrink-0">
 			<button
@@ -59,7 +58,29 @@ export default {
 	},
 	setup(props) {
 		const darkMode = props.darkModeInjectionKey ?? ref(true);
+		// When embedded in the Unraid webGUI the plugin runs in a same-origin
+		// iframe whose parent <html> carries Unraid's theme class
+		// (Theme--black / Theme--gray => dark, Theme--white / Theme--azure =>
+		// light). Detect it so the plugin matches Unraid's color mode.
+		function detectUnraidDark() {
+			try {
+				const parentDoc = window.parent && window.parent.document;
+				const parentHtml = parentDoc && parentDoc.documentElement;
+				if (parentHtml && parentHtml !== document.documentElement) {
+					const cls = parentHtml.className || "";
+					if (/\bTheme--(black|gray|dark)\b/.test(cls)) return true;
+					if (/\bTheme--(white|azure|light)\b/.test(cls)) return false;
+				}
+			} catch (e) {
+				// Not embedded, or a cross-origin parent: fall back below.
+			}
+			return null;
+		}
 		function getTheme() {
+			const unraidDark = detectUnraidDark();
+			if (unraidDark !== null)
+				return unraidDark;
+			// Standalone / dev fallback: OS preference, then any saved choice.
 			let prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
 			let theme = localStorage.getItem("color-theme");
 			if (theme === null)
@@ -74,9 +95,6 @@ export default {
 		} else {
 			document.documentElement.classList.remove("dark");
 		}
-		const home = () => {
-			cockpit.location.go('/');
-		};
 		watch(() => darkMode.value, (darkMode, oldDarkMode) => {
 			localStorage.setItem("color-theme", darkMode ? "dark" : "light");
 			if (darkMode) {
@@ -87,7 +105,6 @@ export default {
 		}, { lazy: false });
 		return {
 			darkMode,
-			home,
 		};
 	},
 	components: {
