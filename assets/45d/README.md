@@ -7,6 +7,9 @@ rebuilding here. (Building from the upstream source under
 `vendor/45drives/cockpit-hardware/` is not supported — it requires 45Drives'
 private package registry and will fail with `401 Unauthorized`.)
 
+See https://github.com/unraid/45d-drivemap/pull/21 for the rationale behind
+treating these assets as vendored, unmaintained output.
+
 - `45drives-disks/` holds a prebuilt Cockpit module release snapshot (v2.5.4-2).
 - `45drives-disks/index.html` is patched to shim Cockpit APIs and route process
   calls to `/plugins/45d-drivemap/php/api.php` on Unraid.
