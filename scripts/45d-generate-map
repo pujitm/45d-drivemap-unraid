@@ -541,7 +541,7 @@ function smart_data($dev_path, $smartctl_dir, $smartctl_nocheck)
     return null;
   }
 
-  $standby_detected = (bool)preg_match('/device\s+is\s+in\s+(standby|sleep)\s+mode/i', $output);
+  $standby_detected = (bool)preg_match('/device\s+is\s+in\s+(?:standby|sleep)(?:\s+\S+)*\s+mode/i', $output);
 
   $decoded = decode_json_loose($output);
   if (!is_array($decoded)) {

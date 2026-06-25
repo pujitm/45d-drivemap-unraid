@@ -607,8 +607,10 @@ $smart_map = load_json_file($ctx['out_dir'] . '/drivemap.json');
 assert_true(is_array($smart_map), 'smart map parses as JSON');
 $smart_1_1 = find_slot($smart_map['rows'] ?? [], '1-1');
 $smart_1_2 = find_slot($smart_map['rows'] ?? [], '1-2');
+$smart_2_1 = find_slot($smart_map['rows'] ?? [], '2-1');
 assert_true(is_array($smart_1_1), 'smart slot 1-1 exists');
 assert_true(is_array($smart_1_2), 'smart slot 1-2 exists');
+assert_true(is_array($smart_2_1), 'smart slot 2-1 exists');
 assert_equal($smart_1_1['model-family'] ?? '', 'Seagate Exos X16', 'smart model-family from fixture');
 assert_equal($smart_1_1['firm-ver'] ?? '', 'SC60', 'smart firmware from fixture');
 assert_equal($smart_1_1['start-stop-count'] ?? '', '12', 'smart start-stop count');
@@ -617,6 +619,7 @@ assert_equal($smart_1_1['temp-c'] ?? '', '35 C', 'smart ata temperature');
 assert_equal($smart_1_1['health'] ?? '', 'OK', 'smart health');
 assert_equal($smart_1_1['power-on-time'] ?? '', '12345', 'smart power on time');
 assert_equal($smart_1_2['temp-c'] ?? '', '30 C', 'smart non-ata temperature');
+assert_equal($smart_2_1['power-mode'] ?? '', 'STANDBY', 'smart sas standby by command power mode');
 
 // Scenario 3: H16/Q30 row parity against upstream lsdev alias_template.
 $ctx_h16_q30 = create_context('h16q30');
