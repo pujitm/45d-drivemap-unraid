@@ -7,6 +7,7 @@ $output_file = getenv('DRIVEMAP_SERVER_INFO_OUTPUT') ?: ($output_dir . '/server_
 $source_file = getenv('DRIVEMAP_SERVER_INFO_INPUT') ?: '/etc/45drives/server_info/server_info.json';
 $vendor_server_identifier = getenv('DRIVEMAP_VENDOR_SERVER_IDENTIFIER') ?: '/opt/45drives/tools/server_identifier';
 $alias_file = getenv('DRIVEMAP_ALIAS_FILE') ?: '/etc/vdev_id.conf';
+$plugin_config_dir = rtrim(getenv('DRIVEMAP_PLUGIN_CONFIG_DIR') ?: '/boot/config/plugins/45d-drivemap', "/\\");
 $force_model = getenv('DRIVEMAP_SERVER_MODEL') ?: '';
 $force_chassis = getenv('DRIVEMAP_CHASSIS_SIZE') ?: '';
 $force_alias = getenv('DRIVEMAP_ALIAS_STYLE') ?: '';
@@ -37,6 +38,15 @@ function read_first_value($paths)
   }
   return '';
 }
+
+function product_name_value($value)
+{
+  return trim(str_replace(["\r", "\n"], '', (string)$value));
+}
+
+$product_name_file_override = product_name_value(read_first_value([
+  $plugin_config_dir . '/product_name',
+]));
 
 function alias_templates()
 {
@@ -427,10 +437,16 @@ if (is_executable($vendor_server_identifier)) {
   }
 }
 
-$product_name = $product_name_override !== '' ? $product_name_override : read_first_value([
-  '/sys/class/dmi/id/product_name',
-  '/sys/class/dmi/id/board_name',
-]);
+$product_name = product_name_value($product_name_override);
+if ($product_name === '') {
+  $product_name = $product_name_file_override;
+}
+if ($product_name === '') {
+  $product_name = product_name_value(read_first_value([
+    '/sys/class/dmi/id/product_name',
+    '/sys/class/dmi/id/board_name',
+  ]));
+}
 $board_name = $board_name_override !== '' ? $board_name_override : read_first_value([
   '/sys/class/dmi/id/board_name',
   '/sys/class/dmi/id/product_name',
