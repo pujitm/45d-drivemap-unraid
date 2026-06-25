@@ -346,7 +346,7 @@ function hardware_profile($product_name, $board_name, $hbas)
       'prefix' => 'HomeLab',
       'style' => 'HOMELAB',
       'chassis' => 'HL15',
-      'model' => '45Homelab HL-15 1.0',
+      'model' => '45Homelab HL-15',
     ];
   }
   return null;
