@@ -861,6 +861,7 @@ $av15_base_result = run_ported_dmap($root, $ctx_av15_base_sata, $av15_base_serve
 assert_equal($av15_base_result['code'] ?? 1, 0, 'av15 base dmap exits successfully with sSATA present');
 $av15_base_aliases = $av15_base_result['aliases'] ?? [];
 assert_equal($av15_base_aliases[8] ?? '', 'alias 1-9 /dev/disk/by-path/pci-0000:00:17.0-ata-2', 'av15 base uses SATA bus instead of sSATA bus');
+assert_true(!preg_grep('/pci-0000:00:11\.5-ata/', $av15_base_aliases), 'av15 base never selects the sSATA bus for any alias');
 
 // Scenario 8d: X11 systems with an HBA 9400-16i use the X11-specific phy swap.
 $ctx_hl15_x11_hba = create_context('ported-dmap-hl15-x11-hba-9400');
