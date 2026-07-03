@@ -153,15 +153,7 @@ function set_common_env($ctx, $fixtures)
 
 function run_php_script($script, $env = [])
 {
-  $prefix = [];
-  foreach ($env as $key => $value) {
-    $prefix[] = $key . '=' . escapeshellarg((string)$value);
-  }
-  $output = [];
-  $code = 0;
-  $cmd = (count($prefix) ? implode(' ', $prefix) . ' ' : '') . 'php ' . escapeshellarg($script);
-  exec($cmd, $output, $code);
-  return [$code, $output];
+  return run_php_script_args($script, [], $env);
 }
 
 function run_php_script_args($script, $args = [], $env = [])
@@ -818,6 +810,7 @@ $hl15_x11_server = [
   'OS VERSION_ID' => '',
 ];
 $hl15_x11_lspci = [
+  '00:11.5 SATA controller: Intel Corporation C620 Series Chipset Family sSATA Controller [AHCI mode]',
   '00:17.0 SATA controller: Intel Corporation C620 Series Chipset Family SATA Controller [AHCI mode]',
   '19:00.0 Serial Attached SCSI controller: Broadcom / LSI SAS3008 PCI-Express Fusion-MPT SAS-3',
 ];
@@ -844,7 +837,32 @@ $hl15_x11_expected = [
 ];
 assert_equal($hl15_x11_result['aliases'] ?? null, $hl15_x11_expected, 'hl15 x11 no-hba dmap matches factory dalias order');
 
-// Scenario 8c: X11 systems with an HBA 9400-16i use the X11-specific phy swap.
+// Scenario 8c: AV15 base aliasing also ignores Intel sSATA when choosing the SATA bus.
+$ctx_av15_base_sata = create_context('ported-dmap-av15-base-sata-regex');
+$av15_base_server = [
+  'Model' => 'Storinator-AV15',
+  'Alias Style' => 'AV15-BASE',
+  'Chassis Size' => 'AV15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$av15_base_lspci = [
+  '00:11.5 SATA controller: Intel Corporation C620 Series Chipset Family sSATA Controller [AHCI mode]',
+  '00:17.0 SATA controller: Intel Corporation C620 Series Chipset Family SATA Controller [AHCI mode]',
+  '19:00.0 Serial Attached SCSI controller: Broadcom / LSI SAS3008 PCI-Express Fusion-MPT SAS-3',
+];
+$av15_base_result = run_ported_dmap($root, $ctx_av15_base_sata, $av15_base_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($av15_base_lspci),
+]);
+assert_equal($av15_base_result['code'] ?? 1, 0, 'av15 base dmap exits successfully with sSATA present');
+$av15_base_aliases = $av15_base_result['aliases'] ?? [];
+assert_equal($av15_base_aliases[8] ?? '', 'alias 1-9 /dev/disk/by-path/pci-0000:00:17.0-ata-2', 'av15 base uses SATA bus instead of sSATA bus');
+
+// Scenario 8d: X11 systems with an HBA 9400-16i use the X11-specific phy swap.
 $ctx_hl15_x11_hba = create_context('ported-dmap-hl15-x11-hba-9400');
 $hl15_x11_hba_server = [
   'Model' => '45Homelab HL-15 1.0',
@@ -866,7 +884,7 @@ assert_equal($hl15_x11_hba_aliases[7] ?? '', 'alias 1-8 /dev/disk/by-path/pci-00
 assert_equal($hl15_x11_hba_aliases[14] ?? '', 'alias 1-15 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy4-lun-0', 'hl15 x11 hba 9400 keeps slot 1-15 on phy4');
 assert_true(!in_array('alias 1-8 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy14-lun-0', $hl15_x11_hba_aliases, true), 'hl15 x11 hba 9400 does not map emitted slots to phy14');
 
-// Scenario 8d: site-specific HBA phy overrides can support non-standard motherboard/HBA builds.
+// Scenario 8e: site-specific HBA phy overrides can support non-standard motherboard/HBA builds.
 $ctx_hba_override = create_context('ported-dmap-hba-phy-override');
 $override_config_dir = $ctx_hba_override['tmp'] . '/plugin-config';
 ensure_dir($override_config_dir);

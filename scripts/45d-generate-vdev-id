@@ -245,6 +245,24 @@ function phy_order_for_hba($server, $model, $phy_order, $phy_order_overrides)
   return $phy_order[$model] ?? null;
 }
 
+function resolve_hba_order($server, $model, $bus, $base_order, $phy_order_overrides, $unsupported_context)
+{
+  $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
+  if ($is_hwraid) {
+    $hwraid = hwraid_map_for_bus($bus);
+    if (!is_array($hwraid)) {
+      fail("Missing HWRAID map for bus $bus ($model)");
+    }
+    return $hwraid;
+  }
+
+  $model_phy_order = phy_order_for_hba($server, $model, $base_order, $phy_order_overrides);
+  if (!is_array($model_phy_order)) {
+    fail("Unsupported HBA model for $unsupported_context: $model");
+  }
+  return $model_phy_order;
+}
+
 function generate_hba_aliases($server, $alias_template, $phy_order, $phy_order_overrides)
 {
   $style = (string)($server['Alias Style'] ?? '');
@@ -265,22 +283,13 @@ function generate_hba_aliases($server, $alias_template, $phy_order, $phy_order_o
       fail("Alias template row missing for HBA index $i");
     }
     [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
-    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-    if ($is_hwraid && !is_array($hwraid)) {
-      fail("Missing HWRAID map for bus $bus ($model)");
-    }
-    $model_phy_order = $is_hwraid ? null : phy_order_for_hba($server, $model, $phy_order, $phy_order_overrides);
-    if (!$is_hwraid && !is_array($model_phy_order)) {
-      fail("Unsupported HBA model for aliasing: $model");
-    }
+    $order = resolve_hba_order($server, $model, $bus, $phy_order, $phy_order_overrides, 'aliasing');
 
     $count = (int)$counts[$i];
     if ($style === 'STORINATOR' && $chassis === 'MI4') {
       $count = 4;
     }
 
-    $order = $is_hwraid ? $hwraid : $model_phy_order;
     for ($j = 0; $j < $count; $j++) {
       $order_index = $j;
       if ($style === 'H32' && $i === count($counts) - 2 && $j >= 15) {
@@ -304,16 +313,7 @@ function generate_c8_aliases($server, $phy_order, $phy_order_overrides, $alias_t
     fail("Unsupported C8 template: $style/$chassis");
   }
   [$model, $bus] = require_hba($server, 0, "$style/$chassis");
-  $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-  $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-  if ($is_hwraid && !is_array($hwraid)) {
-    fail("Missing HWRAID map for bus $bus ($model)");
-  }
-  $model_phy_order = $is_hwraid ? null : phy_order_for_hba($server, $model, $phy_order, $phy_order_overrides);
-  if (!$is_hwraid && !is_array($model_phy_order)) {
-    fail("Unsupported HBA model for C8 aliasing: $model");
-  }
-  $order = $is_hwraid ? $hwraid : $model_phy_order;
+  $order = resolve_hba_order($server, $model, $bus, $phy_order, $phy_order_overrides, 'C8 aliasing');
   $count = (int)$alias_template[$style][$chassis][0];
   $lines = [];
   for ($j = 0; $j < $count; $j++) {
@@ -340,16 +340,7 @@ function generate_f8_aliases($server, $f8_order, $phy_order_overrides, $alias_te
       fail("F8 row missing for HBA index $i");
     }
     [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
-    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-    if ($is_hwraid && !is_array($hwraid)) {
-      fail("Missing HWRAID map for bus $bus ($model)");
-    }
-    $model_phy_order = $is_hwraid ? null : phy_order_for_hba($server, $model, $f8_order, $phy_order_overrides);
-    if (!$is_hwraid && !is_array($model_phy_order)) {
-      fail("Unsupported HBA model for F8 aliasing: $model");
-    }
-    $order = $is_hwraid ? $hwraid : $model_phy_order;
+    $order = resolve_hba_order($server, $model, $bus, $f8_order, $phy_order_overrides, 'F8 aliasing');
     $count = (int)$counts[$i];
     for ($j = 0; $j < $count; $j++) {
       if (!isset($order[$j])) {
@@ -424,7 +415,7 @@ function alias_hl15_x11_no_hba($os_name, $os_version_id)
   // Mirrors the factory dalias map for HL15 v1 X11 systems:
   // bays 1-8 on the motherboard SATA controller, bays 1-9..1-15 on onboard SAS3008.
   $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
-  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*Intel.*SATA Controller/');
+  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*Intel.*\bSATA Controller/');
   $sas_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*SAS3008/');
   if ($sata_bus === null || $sas_bus === null) {
     fail('HL15 X11 no-HBA aliasing requires Intel SATA and SAS3008 controllers');
@@ -554,7 +545,7 @@ function alias_mi4($mobo_model, $os_name, $os_version_id)
 function alias_av15_base($os_name, $os_version_id)
 {
   $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
-  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*Intel.*SATA Controller/');
+  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*Intel.*\bSATA Controller/');
   $sas_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*SAS3008/');
   if ($sata_bus === null || $sas_bus === null) {
     fail('Error aliasing AV15-BASE: missing SATA or SAS bus');
