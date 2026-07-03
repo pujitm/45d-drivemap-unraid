@@ -3,6 +3,7 @@ $root = dirname(__DIR__);
 $fixtures = __DIR__ . '/fixtures';
 $map_script = $root . '/scripts/45d-generate-map';
 $server_script = $root . '/scripts/45d-generate-server-info';
+$hba_paths_script = $root . '/scripts/45d-list-hba-paths';
 
 $failures = 0;
 $cleanup_dirs = [];
@@ -159,6 +160,26 @@ function run_php_script($script, $env = [])
   $output = [];
   $code = 0;
   $cmd = (count($prefix) ? implode(' ', $prefix) . ' ' : '') . 'php ' . escapeshellarg($script);
+  exec($cmd, $output, $code);
+  return [$code, $output];
+}
+
+function run_php_script_args($script, $args = [], $env = [])
+{
+  $prefix = [];
+  foreach ($env as $key => $value) {
+    $prefix[] = $key . '=' . escapeshellarg((string)$value);
+  }
+  $parts = [];
+  foreach ($args as $arg) {
+    $parts[] = escapeshellarg((string)$arg);
+  }
+  $output = [];
+  $code = 0;
+  $cmd = (count($prefix) ? implode(' ', $prefix) . ' ' : '') . 'php ' . escapeshellarg($script);
+  if ($parts) {
+    $cmd .= ' ' . implode(' ', $parts);
+  }
   exec($cmd, $output, $code);
   return [$code, $output];
 }
@@ -496,6 +517,31 @@ $server_info = load_json_file($server_info_path);
 assert_true(is_array($server_info), 'server_info.json parses as JSON');
 assert_equal($server_info['Model'] ?? '', 'Storinator-S45', 'server_info model');
 
+// Scenario 1b: HBA path inventory helper lists by-path, sdX, serial, and port.
+$ctx_hba_paths = create_context('hba-paths');
+@symlink($ctx_hba_paths['dev_dir'] . '/sda', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sdb', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-scsi-0:0:59:0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sdc', $ctx_hba_paths['by_path_dir'] . '/pci-0000:02:00.0-sas-phy1-lun-0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sda', $ctx_hba_paths['by_path_dir'] . '/pci-0000:00:17.0-ata-1');
+[$hba_paths_code, $hba_paths_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $ctx_hba_paths['by_path_dir'],
+  'DRIVEMAP_LSBLK' => $fixtures . '/lsblk.txt',
+]);
+assert_equal($hba_paths_code, 0, 'hba path helper exits successfully');
+$hba_paths_rows = json_decode(implode("\n", $hba_paths_output), true);
+assert_true(is_array($hba_paths_rows), 'hba path helper emits JSON rows');
+assert_equal(count($hba_paths_rows), 4, 'hba path helper includes HBA and SATA paths');
+$hba_paths_by_port = array_column($hba_paths_rows, null, 'port');
+assert_equal($hba_paths_by_port['phy2']['hba_path'] ?? '', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0', 'hba path helper includes by-path');
+assert_equal($hba_paths_by_port['phy2']['device'] ?? '', '/dev/sda', 'hba path helper resolves sdX');
+assert_equal($hba_paths_by_port['phy2']['serial'] ?? '', 'SAMPLE0001', 'hba path helper includes serial');
+assert_equal($hba_paths_by_port['phy2']['model'] ?? '', 'ST12000NM0007', 'hba path helper includes model');
+assert_equal($hba_paths_by_port['phy2']['port_type'] ?? '', 'sas', 'hba path helper parses sas phy');
+assert_equal($hba_paths_by_port['target59']['device'] ?? '', '/dev/sdb', 'hba path helper resolves scsi sdX');
+assert_equal($hba_paths_by_port['target59']['port_type'] ?? '', 'scsi', 'hba path helper parses scsi target');
+assert_equal($hba_paths_by_port['ata1']['device'] ?? '', '/dev/sda', 'hba path helper resolves sata sdX');
+assert_equal($hba_paths_by_port['ata1']['port_type'] ?? '', 'ata', 'hba path helper parses sata port');
+
 [$lsdev_code, $lsdev_body] = run_api_action($root, 'lsdev');
 assert_equal($lsdev_code, 0, 'lsdev endpoint exits successfully');
 $lsdev = json_decode($lsdev_body, true);
@@ -758,6 +804,98 @@ if (is_array($invalid_server)) {
   assert_true($invalid_aliases === null || $invalid_aliases === [], 'ported dmap does not emit aliases on invalid style');
 }
 
+// Scenario 8b: HL15 v1 X11 systems without a discrete HBA use the factory dalias order.
+$ctx_hl15_x11 = create_context('ported-dmap-hl15-x11-no-hba');
+$hl15_x11_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$hl15_x11_lspci = [
+  '00:17.0 SATA controller: Intel Corporation C620 Series Chipset Family SATA Controller [AHCI mode]',
+  '19:00.0 Serial Attached SCSI controller: Broadcom / LSI SAS3008 PCI-Express Fusion-MPT SAS-3',
+];
+$hl15_x11_result = run_ported_dmap($root, $ctx_hl15_x11, $hl15_x11_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($hl15_x11_lspci),
+]);
+assert_equal($hl15_x11_result['code'] ?? 1, 0, 'hl15 x11 no-hba dmap exits successfully');
+$hl15_x11_expected = [
+  'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1',
+  'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2',
+  'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
+  'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
+  'alias 1-5 /dev/disk/by-path/pci-0000:00:17.0-ata-5',
+  'alias 1-6 /dev/disk/by-path/pci-0000:00:17.0-ata-6',
+  'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-7',
+  'alias 1-8 /dev/disk/by-path/pci-0000:00:17.0-ata-8',
+  'alias 1-9 /dev/disk/by-path/pci-0000:19:00.0-sas-phy0-lun-0',
+  'alias 1-10 /dev/disk/by-path/pci-0000:19:00.0-sas-phy1-lun-0',
+  'alias 1-11 /dev/disk/by-path/pci-0000:19:00.0-sas-phy2-lun-0',
+  'alias 1-12 /dev/disk/by-path/pci-0000:19:00.0-sas-phy3-lun-0',
+  'alias 1-13 /dev/disk/by-path/pci-0000:19:00.0-sas-phy4-lun-0',
+  'alias 1-14 /dev/disk/by-path/pci-0000:19:00.0-sas-phy5-lun-0',
+  'alias 1-15 /dev/disk/by-path/pci-0000:19:00.0-sas-phy6-lun-0',
+];
+assert_equal($hl15_x11_result['aliases'] ?? null, $hl15_x11_expected, 'hl15 x11 no-hba dmap matches factory dalias order');
+
+// Scenario 8c: X11 systems with an HBA 9400-16i use the X11-specific phy swap.
+$ctx_hl15_x11_hba = create_context('ported-dmap-hl15-x11-hba-9400');
+$hl15_x11_hba_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [[
+    'Model' => 'HBA 9400-16i',
+    'Bus Address' => '0000:b4:00.0',
+    'Drive Connections' => 16,
+  ]],
+];
+$hl15_x11_hba_result = run_ported_dmap($root, $ctx_hl15_x11_hba, $hl15_x11_hba_server, []);
+assert_equal($hl15_x11_hba_result['code'] ?? 1, 0, 'hl15 x11 hba 9400 dmap exits successfully');
+$hl15_x11_hba_aliases = $hl15_x11_hba_result['aliases'] ?? [];
+assert_equal($hl15_x11_hba_aliases[7] ?? '', 'alias 1-8 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy6-lun-0', 'hl15 x11 hba 9400 maps slot 1-8 to phy6');
+assert_equal($hl15_x11_hba_aliases[14] ?? '', 'alias 1-15 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy4-lun-0', 'hl15 x11 hba 9400 keeps slot 1-15 on phy4');
+assert_true(!in_array('alias 1-8 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy14-lun-0', $hl15_x11_hba_aliases, true), 'hl15 x11 hba 9400 does not map emitted slots to phy14');
+
+// Scenario 8d: site-specific HBA phy overrides can support non-standard motherboard/HBA builds.
+$ctx_hba_override = create_context('ported-dmap-hba-phy-override');
+$override_config_dir = $ctx_hba_override['tmp'] . '/plugin-config';
+ensure_dir($override_config_dir);
+file_put_contents($override_config_dir . '/hba_phy_order_overrides.json', json_encode([
+  'X11CUSTOM' => [
+    'HBA 9400-16i' => [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+  ],
+], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+$hba_override_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11CUSTOM',
+  ],
+  'HBA' => [[
+    'Model' => 'HBA 9400-16i',
+    'Bus Address' => '0000:b4:00.0',
+    'Drive Connections' => 16,
+  ]],
+];
+$hba_override_result = run_ported_dmap($root, $ctx_hba_override, $hba_override_server, [
+  'DRIVEMAP_PLUGIN_CONFIG_DIR' => $override_config_dir,
+]);
+assert_equal($hba_override_result['code'] ?? 1, 0, 'hba phy override dmap exits successfully');
+$hba_override_aliases = $hba_override_result['aliases'] ?? [];
+assert_equal($hba_override_aliases[0] ?? '', 'alias 1-1 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy15-lun-0', 'hba phy override maps slot 1-1 from config');
+assert_equal($hba_override_aliases[14] ?? '', 'alias 1-15 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy1-lun-0', 'hba phy override maps slot 1-15 from config');
+
 // Scenario 9: HL15 fallback detection + auto alias generation without vendor tools.
 $ctx_hl15 = create_context('hl15-fallback');
 set_common_env($ctx_hl15, $fixtures);
@@ -793,7 +931,25 @@ assert_true(is_array($hl15_map), 'hl15 fallback drivemap parses as JSON');
 assert_equal(count($hl15_map['rows'] ?? []), 1, 'hl15 fallback row count');
 assert_equal(count($hl15_map['rows'][0] ?? []), 15, 'hl15 fallback bay count');
 
-// Scenario 10: copied server_info gains a stable canvas model without changing the display model.
+// Scenario 10: X11 HL15 v1 detection works even when no HBA is reported.
+$ctx_hl15_x11_info = create_context('hl15-x11-server-info-no-hba');
+set_common_env($ctx_hl15_x11_info, $fixtures);
+[$hl15_x11_info_code] = run_php_script($server_script, [
+  'DRIVEMAP_PRODUCT_NAME' => 'X11SPH-nCTPF',
+  'DRIVEMAP_BOARD_NAME' => 'X11SPH-nCTPF',
+  'DRIVEMAP_BOARD_VENDOR' => 'Supermicro',
+  'DRIVEMAP_LSPCI_VERBOSE' => '',
+  'DRIVEMAP_OUTPUT_DIR' => $ctx_hl15_x11_info['out_dir'],
+]);
+assert_equal($hl15_x11_info_code, 0, 'hl15 x11 no-hba server_info exits successfully');
+$hl15_x11_info = load_json_file($ctx_hl15_x11_info['out_dir'] . '/server_info.json');
+assert_true(is_array($hl15_x11_info), 'hl15 x11 no-hba server_info parses as JSON');
+assert_equal($hl15_x11_info['Model'] ?? '', '45Homelab HL-15 1.0', 'hl15 x11 no-hba model');
+assert_equal($hl15_x11_info['Alias Style'] ?? '', 'HOMELAB', 'hl15 x11 no-hba alias style');
+assert_equal($hl15_x11_info['Chassis Size'] ?? '', 'HL15', 'hl15 x11 no-hba chassis');
+assert_equal($hl15_x11_info['HBA'] ?? null, [], 'hl15 x11 no-hba has empty hba list');
+
+// Scenario 11: copied server_info gains a stable canvas model without changing the display model.
 $ctx_server_copy = create_context('server-info-copy-canvas-model');
 set_common_env($ctx_server_copy, $fixtures);
 $server_copy_input = $ctx_server_copy['tmp'] . '/source_server_info.json';

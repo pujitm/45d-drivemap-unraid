@@ -325,7 +325,7 @@ function hardware_profile($product_name, $board_name, $hbas)
       'model' => 'Unraid >< 45Homelab X-15',
     ];
   }
-  if ($has_name(['X11SPH-nCTF', 'X11SPH-nCTPF']) && count_hbas_by_connections($hbas, 16) === 1 && count_hbas_by_connections($hbas, 24) === 0) {
+  if ($has_name(['X11SPH-nCTF', 'X11SPH-nCTPF']) && count_hbas_by_connections($hbas, 16) <= 1 && count_hbas_by_connections($hbas, 24) === 0) {
     return [
       'prefix' => 'HomeLab',
       'style' => 'HOMELAB',
