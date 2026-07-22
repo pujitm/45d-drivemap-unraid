@@ -529,10 +529,35 @@ assert_equal($hba_paths_by_port['phy2']['device'] ?? '', '/dev/sda', 'hba path h
 assert_equal($hba_paths_by_port['phy2']['serial'] ?? '', 'SAMPLE0001', 'hba path helper includes serial');
 assert_equal($hba_paths_by_port['phy2']['model'] ?? '', 'ST12000NM0007', 'hba path helper includes model');
 assert_equal($hba_paths_by_port['phy2']['port_type'] ?? '', 'sas', 'hba path helper parses sas phy');
+assert_equal($hba_paths_by_port['phy2']['path_source'] ?? '', 'by-path', 'hba path helper marks by-path source');
 assert_equal($hba_paths_by_port['target59']['device'] ?? '', '/dev/sdb', 'hba path helper resolves scsi sdX');
 assert_equal($hba_paths_by_port['target59']['port_type'] ?? '', 'scsi', 'hba path helper parses scsi target');
 assert_equal($hba_paths_by_port['ata1']['device'] ?? '', '/dev/sda', 'hba path helper resolves sata sdX');
 assert_equal($hba_paths_by_port['ata1']['port_type'] ?? '', 'ata', 'hba path helper parses sata port');
+
+// Scenario 1c: HBA path inventory helper includes lsblk-visible SATA disks
+// even when udev does not publish /dev/disk/by-path ata symlinks.
+$ctx_hba_paths_sata_fallback = create_context('hba-paths-sata-fallback');
+@symlink($ctx_hba_paths_sata_fallback['dev_dir'] . '/sda', $ctx_hba_paths_sata_fallback['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0');
+$lsblk_sata_fallback = implode("\n", [
+  'NAME="sda" TYPE="disk" TRAN="sas" HCTL="0:0:0:0" MODEL="ST12000NM0007" SERIAL="SAMPLE0001" SIZE="1099511627776" ROTA="1"',
+  'NAME="sdg" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="WDC WUH721414ALE6L4" SERIAL="9JH7KJXT" SIZE="14000519643136" ROTA="1"',
+  'NAME="sdg1" TYPE="part" TRAN="" HCTL="" MODEL="" SERIAL="" SIZE="14000518594560" ROTA="1"',
+]);
+[$hba_paths_sata_code, $hba_paths_sata_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $ctx_hba_paths_sata_fallback['by_path_dir'],
+  'DRIVEMAP_LSBLK' => $lsblk_sata_fallback,
+]);
+assert_equal($hba_paths_sata_code, 0, 'hba path helper with sata fallback exits successfully');
+$hba_paths_sata_rows = json_decode(implode("\n", $hba_paths_sata_output), true);
+assert_true(is_array($hba_paths_sata_rows), 'hba path helper with sata fallback emits JSON rows');
+assert_equal(count($hba_paths_sata_rows), 2, 'hba path helper includes by-path and lsblk-only SATA rows');
+$hba_paths_sata_by_device = array_column($hba_paths_sata_rows, null, 'device');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['hba_path'] ?? '', 'lsblk:sata:3:0:0:0', 'hba path helper marks lsblk-only SATA source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port_type'] ?? '', 'sata', 'hba path helper marks lsblk-only SATA transport');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['path_source'] ?? '', 'lsblk', 'hba path helper marks lsblk fallback source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port'] ?? '', 'hctl3:0:0:0', 'hba path helper includes lsblk HCTL clue');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['serial'] ?? '', '9JH7KJXT', 'hba path helper includes lsblk-only SATA serial');
 
 [$lsdev_code, $lsdev_body] = run_api_action($root, 'lsdev');
 assert_equal($lsdev_code, 0, 'lsdev endpoint exits successfully');

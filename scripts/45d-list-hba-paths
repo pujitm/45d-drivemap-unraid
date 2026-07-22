@@ -1,6 +1,7 @@
 #!/usr/bin/php
 <?php
 // Lists storage by-path entries with their resolved block device and lsblk identity.
+// Falls back to lsblk SATA rows when udev does not expose an ata by-path link.
 
 $opts = getopt('', ['json', 'help', 'path-dir:', 'lsblk:']);
 if (isset($opts['help'])) {
@@ -26,7 +27,7 @@ function load_lsblk_map($source)
   if ($source !== '') {
     $output = is_file($source) ? (string)@file_get_contents($source) : (string)$source;
   } else {
-    $output = shell_exec('lsblk -P -b -o NAME,MODEL,SERIAL,SIZE,ROTA 2>/dev/null');
+    $output = shell_exec('lsblk -P -b -o NAME,TYPE,TRAN,HCTL,MODEL,SERIAL,SIZE,ROTA 2>/dev/null');
   }
   if (!is_string($output) || trim($output) === '') {
     return [];
@@ -96,6 +97,7 @@ if (!is_dir($path_dir)) {
 
 $lsblk = load_lsblk_map($lsblk_source);
 $rows = [];
+$devices_with_path = [];
 $items = scandir($path_dir);
 if (!is_array($items)) {
   fail("Unable to read storage path directory: $path_dir");
@@ -114,6 +116,9 @@ foreach ($items as $item) {
   $resolved = realpath($path);
   $device = $resolved !== false ? basename($resolved) : '';
   $identity = $device !== '' && isset($lsblk[$device]) ? $lsblk[$device] : [];
+  if ($device !== '') {
+    $devices_with_path[$device] = true;
+  }
 
   $rows[] = [
     'hba_path' => $path,
@@ -124,7 +129,35 @@ foreach ($items as $item) {
     'bus' => $info['bus'],
     'port' => $info['port'],
     'port_type' => $info['port_type'],
+    'path_source' => 'by-path',
     '_sort_port' => $info['sort_port'],
+  ];
+}
+
+foreach ($lsblk as $device => $identity) {
+  if (isset($devices_with_path[$device])) {
+    continue;
+  }
+  if (($identity['TRAN'] ?? '') !== 'sata') {
+    continue;
+  }
+  $type = (string)($identity['TYPE'] ?? 'disk');
+  if ($type !== '' && $type !== 'disk') {
+    continue;
+  }
+
+  $hctl = (string)($identity['HCTL'] ?? '');
+  $rows[] = [
+    'hba_path' => $hctl !== '' ? 'lsblk:sata:' . $hctl : 'lsblk:sata',
+    'device' => '/dev/' . $device,
+    'serial' => (string)($identity['SERIAL'] ?? ''),
+    'model' => (string)($identity['MODEL'] ?? ''),
+    'size' => format_bytes($identity['SIZE'] ?? ''),
+    'bus' => $hctl !== '' ? 'hctl:' . $hctl : '',
+    'port' => $hctl !== '' ? 'hctl' . $hctl : 'sata',
+    'port_type' => 'sata',
+    'path_source' => 'lsblk',
+    '_sort_port' => $hctl !== '' && preg_match('/^(\d+):/', $hctl, $matches) ? (int)$matches[1] : PHP_INT_MAX,
   ];
 }
 
