@@ -142,15 +142,11 @@ function storage_path_info($name)
   return null;
 }
 
-if (!is_dir($path_dir)) {
-  fail("Storage path directory not found: $path_dir");
-}
-
 $lsblk = load_lsblk_map($lsblk_source);
 $rows = [];
 $devices_with_path = [];
-$items = scandir($path_dir);
-if (!is_array($items)) {
+$items = is_dir($path_dir) ? scandir($path_dir) : [];
+if ($items === false) {
   fail("Unable to read storage path directory: $path_dir");
 }
 

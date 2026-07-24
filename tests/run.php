@@ -566,6 +566,26 @@ assert_equal($hba_paths_sata_by_device['/dev/sdg']['bus'] ?? '', '0000:00:17.0',
 assert_equal($hba_paths_sata_by_device['/dev/sdg']['port'] ?? '', 'ata3', 'hba path helper derives SATA port from udev DEVPATH');
 assert_equal($hba_paths_sata_by_device['/dev/sdg']['serial'] ?? '', '9JH7KJXT', 'hba path helper includes lsblk-only SATA serial');
 
+// Scenario 1d: HBA path inventory helper still reports fallback rows when /dev/disk/by-path is absent.
+$ctx_hba_paths_missing_dir = create_context('hba-paths-missing-dir');
+$missing_by_path_dir = $ctx_hba_paths_missing_dir['tmp'] . '/missing-by-path';
+[$hba_paths_missing_dir_code, $hba_paths_missing_dir_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $missing_by_path_dir,
+  'DRIVEMAP_LSBLK' => $lsblk_sata_fallback,
+  'DRIVEMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hba_paths_missing_dir_code, 0, 'hba path helper tolerates missing by-path directory');
+$hba_paths_missing_dir_rows = json_decode(implode("\n", $hba_paths_missing_dir_output), true);
+assert_true(is_array($hba_paths_missing_dir_rows), 'hba path helper emits JSON with missing by-path directory');
+$hba_paths_missing_dir_by_device = array_column($hba_paths_missing_dir_rows, null, 'device');
+assert_equal($hba_paths_missing_dir_by_device['/dev/sdg']['hba_path'] ?? '', 'udev:devpath:pci-0000:00:17.0-ata-3', 'hba path helper includes udev fallback when by-path directory is missing');
+assert_true(!isset($hba_paths_missing_dir_by_device['/dev/sda']), 'hba path helper does not invent SAS topology without by-path evidence');
+
 [$lsdev_code, $lsdev_body] = run_api_action($root, 'lsdev');
 assert_equal($lsdev_code, 0, 'lsdev endpoint exits successfully');
 $lsdev = json_decode($lsdev_body, true);
