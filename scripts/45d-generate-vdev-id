@@ -62,6 +62,122 @@ function env_json_object($name)
   return $decoded;
 }
 
+function env_json_object_any($names)
+{
+  foreach ($names as $name) {
+    $decoded = env_json_object($name);
+    if (is_array($decoded)) {
+      return $decoded;
+    }
+  }
+  return null;
+}
+
+function parse_key_value_properties($output)
+{
+  $props = [];
+  foreach (preg_split('/\r?\n/', trim((string)$output)) as $line) {
+    if (preg_match('/^([A-Z0-9_]+)=(.*)$/', $line, $matches)) {
+      $props[$matches[1]] = $matches[2];
+    }
+  }
+  return $props;
+}
+
+function parse_lsblk_rows($output)
+{
+  $rows = [];
+  if (!is_string($output) || trim($output) === '') {
+    return $rows;
+  }
+  foreach (preg_split('/\r?\n/', trim($output)) as $line) {
+    $fields = [];
+    if (preg_match_all('/(\w+)="([^"]*)"/', (string)$line, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $fields[$match[1]] = $match[2];
+      }
+    }
+    if (isset($fields['NAME']) && $fields['NAME'] !== '') {
+      $rows[$fields['NAME']] = $fields;
+    }
+  }
+  return $rows;
+}
+
+function lsblk_rows()
+{
+  $source = getenv('DRIVEMAP_DMAP_LSBLK');
+  if (is_string($source) && $source !== '') {
+    return parse_lsblk_rows(is_file($source) ? (string)@file_get_contents($source) : $source);
+  }
+  $source = getenv('DRIVEMAP_LSBLK');
+  if (is_string($source) && $source !== '') {
+    return parse_lsblk_rows(is_file($source) ? (string)@file_get_contents($source) : $source);
+  }
+  $output = shell_exec('lsblk -P -b -o NAME,TYPE,TRAN,HCTL,MODEL,SERIAL,SIZE,ROTA 2>/dev/null');
+  return parse_lsblk_rows($output);
+}
+
+function udev_properties($device)
+{
+  $mock = env_json_object_any(['DRIVEMAP_DMAP_UDEVADM_PROPS_JSON', 'DRIVEMAP_UDEVADM_PROPS_JSON']);
+  if (is_array($mock) && isset($mock[$device]) && is_array($mock[$device])) {
+    return array_map('strval', $mock[$device]);
+  }
+
+  $output = shell_exec('udevadm info --query=property --name=' . escapeshellarg('/dev/' . $device) . ' 2>/dev/null');
+  return is_string($output) ? parse_key_value_properties($output) : [];
+}
+
+function preferred_devlink_path($props, $device)
+{
+  $links = preg_split('/\s+/', trim((string)($props['DEVLINKS'] ?? '')));
+  if (!is_array($links)) {
+    $links = [];
+  }
+  foreach (['/dev/disk/by-id/ata-', '/dev/disk/by-id/wwn-'] as $prefix) {
+    foreach ($links as $link) {
+      if (strpos($link, $prefix) === 0 && strpos($link, '-part') === false) {
+        return $link;
+      }
+    }
+  }
+  return '/dev/' . $device;
+}
+
+function sata_devpath_alias_map($bus)
+{
+  static $cache = [];
+  if (isset($cache[$bus])) {
+    return $cache[$bus];
+  }
+
+  $map = [];
+  foreach (lsblk_rows() as $device => $identity) {
+    $type = (string)($identity['TYPE'] ?? 'disk');
+    if ($type !== '' && $type !== 'disk') {
+      continue;
+    }
+    if (($identity['TRAN'] ?? '') !== 'sata') {
+      continue;
+    }
+
+    $props = udev_properties($device);
+    $devpath = (string)($props['DEVPATH'] ?? '');
+    if (($props['ID_BUS'] ?? '') !== 'ata' || $devpath === '') {
+      continue;
+    }
+    if (!preg_match('#/' . preg_quote($bus, '#') . '/ata(\d+)(?:/|$)#', $devpath, $matches)) {
+      continue;
+    }
+    $map[(int)$matches[1]] = preferred_devlink_path($props, $device);
+  }
+
+  ksort($map);
+  $cache[$bus] = $map;
+  return $map;
+}
+
 function normalize_phy_order($value, $source)
 {
   if (!is_array($value) || !$value) {
@@ -421,9 +537,16 @@ function alias_hl15_x11_no_hba($os_name, $os_version_id)
     fail('HL15 X11 no-HBA aliasing requires Intel SATA and SAS3008 controllers');
   }
 
+  $sata_devpath_aliases = sata_devpath_alias_map($sata_bus);
   $lines = [];
-  for ($port = 1; $port <= 8; $port++) {
-    add_alias($lines, 1, $port, "/dev/disk/by-path/pci-$sata_bus-ata-$port$suffix");
+  $sata_ports = range(3, 10);
+  foreach ($sata_ports as $idx => $port) {
+    $slot = $idx + 1;
+    $by_path = "/dev/disk/by-path/pci-$sata_bus-ata-$port$suffix";
+    $path = (is_link($by_path) || is_file($by_path))
+      ? $by_path
+      : ($sata_devpath_aliases[$port] ?? $by_path);
+    add_alias($lines, 1, $slot, $path);
   }
   for ($phy = 0; $phy < 7; $phy++) {
     add_alias($lines, 1, $phy + 9, "/dev/disk/by-path/pci-$sas_bus-sas-phy$phy-lun-0");

@@ -547,16 +547,23 @@ $lsblk_sata_fallback = implode("\n", [
 [$hba_paths_sata_code, $hba_paths_sata_output] = run_php_script_args($hba_paths_script, ['--json'], [
   'DRIVEMAP_HBA_PATH_DIR' => $ctx_hba_paths_sata_fallback['by_path_dir'],
   'DRIVEMAP_LSBLK' => $lsblk_sata_fallback,
+  'DRIVEMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
 ]);
 assert_equal($hba_paths_sata_code, 0, 'hba path helper with sata fallback exits successfully');
 $hba_paths_sata_rows = json_decode(implode("\n", $hba_paths_sata_output), true);
 assert_true(is_array($hba_paths_sata_rows), 'hba path helper with sata fallback emits JSON rows');
 assert_equal(count($hba_paths_sata_rows), 2, 'hba path helper includes by-path and lsblk-only SATA rows');
 $hba_paths_sata_by_device = array_column($hba_paths_sata_rows, null, 'device');
-assert_equal($hba_paths_sata_by_device['/dev/sdg']['hba_path'] ?? '', 'lsblk:sata:3:0:0:0', 'hba path helper marks lsblk-only SATA source');
-assert_equal($hba_paths_sata_by_device['/dev/sdg']['port_type'] ?? '', 'sata', 'hba path helper marks lsblk-only SATA transport');
-assert_equal($hba_paths_sata_by_device['/dev/sdg']['path_source'] ?? '', 'lsblk', 'hba path helper marks lsblk fallback source');
-assert_equal($hba_paths_sata_by_device['/dev/sdg']['port'] ?? '', 'hctl3:0:0:0', 'hba path helper includes lsblk HCTL clue');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['hba_path'] ?? '', 'udev:devpath:pci-0000:00:17.0-ata-3', 'hba path helper marks udev DEVPATH SATA source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port_type'] ?? '', 'ata', 'hba path helper marks udev DEVPATH SATA port type');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['path_source'] ?? '', 'udev-devpath', 'hba path helper marks udev DEVPATH fallback source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['bus'] ?? '', '0000:00:17.0', 'hba path helper derives SATA PCI bus from udev DEVPATH');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port'] ?? '', 'ata3', 'hba path helper derives SATA port from udev DEVPATH');
 assert_equal($hba_paths_sata_by_device['/dev/sdg']['serial'] ?? '', '9JH7KJXT', 'hba path helper includes lsblk-only SATA serial');
 
 [$lsdev_code, $lsdev_body] = run_api_action($root, 'lsdev');
@@ -844,14 +851,14 @@ $hl15_x11_result = run_ported_dmap($root, $ctx_hl15_x11, $hl15_x11_server, [
 ]);
 assert_equal($hl15_x11_result['code'] ?? 1, 0, 'hl15 x11 no-hba dmap exits successfully');
 $hl15_x11_expected = [
-  'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-1',
-  'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-2',
-  'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
-  'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
-  'alias 1-5 /dev/disk/by-path/pci-0000:00:17.0-ata-5',
-  'alias 1-6 /dev/disk/by-path/pci-0000:00:17.0-ata-6',
-  'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-7',
-  'alias 1-8 /dev/disk/by-path/pci-0000:00:17.0-ata-8',
+  'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
+  'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
+  'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-5',
+  'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-6',
+  'alias 1-5 /dev/disk/by-path/pci-0000:00:17.0-ata-7',
+  'alias 1-6 /dev/disk/by-path/pci-0000:00:17.0-ata-8',
+  'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-9',
+  'alias 1-8 /dev/disk/by-path/pci-0000:00:17.0-ata-10',
   'alias 1-9 /dev/disk/by-path/pci-0000:19:00.0-sas-phy0-lun-0',
   'alias 1-10 /dev/disk/by-path/pci-0000:19:00.0-sas-phy1-lun-0',
   'alias 1-11 /dev/disk/by-path/pci-0000:19:00.0-sas-phy2-lun-0',
@@ -861,6 +868,40 @@ $hl15_x11_expected = [
   'alias 1-15 /dev/disk/by-path/pci-0000:19:00.0-sas-phy6-lun-0',
 ];
 assert_equal($hl15_x11_result['aliases'] ?? null, $hl15_x11_expected, 'hl15 x11 no-hba dmap matches factory dalias order');
+
+// Scenario 8b2: HL15 v1 X11 SATA aliases fall back to udev DEVPATH when ata by-path links are absent.
+$ctx_hl15_x11_devpath = create_context('ported-dmap-hl15-x11-devpath-sata');
+$hl15_x11_devpath_result = run_ported_dmap($root, $ctx_hl15_x11_devpath, $hl15_x11_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($hl15_x11_lspci),
+  'DRIVEMAP_DMAP_LSBLK' => implode("\n", [
+    'NAME="sdg" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="WDC WUH721414ALE6L4" SERIAL="9JH7KJXT" SIZE="14000519643136" ROTA="1"',
+    'NAME="sdh" TYPE="disk" TRAN="sata" HCTL="4:0:0:0" MODEL="WDC WUH721414ALE604" SERIAL="9RG7N6VC" SIZE="14000519643136" ROTA="1"',
+    'NAME="sdm" TYPE="disk" TRAN="sata" HCTL="10:0:0:0" MODEL="WDC WD80EFZZ-68BTXN0" SERIAL="WD-CA19LHJK" SIZE="8001563222016" ROTA="1"',
+  ]),
+  'DRIVEMAP_DMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/27 /dev/disk/by-id/ata-WDC_WUH721414ALE6L4_9JH7KJXT /dev/disk/by-id/wwn-0x5000cca258d187f7',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+    'sdh' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/28 /dev/disk/by-id/ata-WDC_WUH721414ALE604_9RG7N6VC /dev/disk/by-id/wwn-0x5000cca264c37a81',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata4/host4/target4:0:0/4:0:0:0/block/sdh',
+      'ID_BUS' => 'ata',
+    ],
+    'sdm' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/33 /dev/disk/by-id/ata-WDC_WD80EFZZ-68BTXN0_WD-CA19LHJK /dev/disk/by-id/wwn-0x50014ee26a68e1eb',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata10/host10/target10:0:0/10:0:0:0/block/sdm',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hl15_x11_devpath_result['code'] ?? 1, 0, 'hl15 x11 devpath SATA dmap exits successfully');
+$hl15_x11_devpath_aliases = $hl15_x11_devpath_result['aliases'] ?? [];
+assert_equal($hl15_x11_devpath_aliases[0] ?? '', 'alias 1-1 /dev/disk/by-id/ata-WDC_WUH721414ALE6L4_9JH7KJXT', 'hl15 x11 maps slot 1-1 from SATA port 3');
+assert_equal($hl15_x11_devpath_aliases[1] ?? '', 'alias 1-2 /dev/disk/by-id/ata-WDC_WUH721414ALE604_9RG7N6VC', 'hl15 x11 maps slot 1-2 from SATA port 4');
+assert_equal($hl15_x11_devpath_aliases[6] ?? '', 'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-9', 'hl15 x11 leaves slot 1-7 missing when SATA port 9 is absent');
+assert_equal($hl15_x11_devpath_aliases[7] ?? '', 'alias 1-8 /dev/disk/by-id/ata-WDC_WD80EFZZ-68BTXN0_WD-CA19LHJK', 'hl15 x11 maps slot 1-8 from SATA port 10');
 
 // Scenario 8c: AV15 base aliasing also ignores Intel sSATA when choosing the SATA bus.
 $ctx_av15_base_sata = create_context('ported-dmap-av15-base-sata-regex');
