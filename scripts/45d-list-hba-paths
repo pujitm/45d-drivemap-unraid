@@ -1,0 +1,240 @@
+#!/usr/bin/php
+<?php
+// Lists storage by-path entries with their resolved block device and lsblk identity.
+// Falls back to lsblk SATA rows when udev does not expose an ata by-path link.
+
+$opts = getopt('', ['json', 'help', 'path-dir:', 'lsblk:']);
+if (isset($opts['help'])) {
+  fwrite(STDOUT, "Usage: 45d-list-hba-paths [--json] [--path-dir /dev/disk/by-path] [--lsblk <file-or-text>]\n");
+  exit(0);
+}
+
+$path_dir = isset($opts['path-dir'])
+  ? (string)$opts['path-dir']
+  : (getenv('DRIVEMAP_HBA_PATH_DIR') ?: '/dev/disk/by-path');
+$lsblk_source = isset($opts['lsblk'])
+  ? (string)$opts['lsblk']
+  : (getenv('DRIVEMAP_LSBLK') ?: '');
+
+function fail($message)
+{
+  fwrite(STDERR, $message . "\n");
+  exit(1);
+}
+
+function load_lsblk_map($source)
+{
+  if ($source !== '') {
+    $output = is_file($source) ? (string)@file_get_contents($source) : (string)$source;
+  } else {
+    $output = shell_exec('lsblk -P -b -o NAME,TYPE,TRAN,HCTL,MODEL,SERIAL,SIZE,ROTA 2>/dev/null');
+  }
+  if (!is_string($output) || trim($output) === '') {
+    return [];
+  }
+
+  $map = [];
+  foreach (preg_split('/\r?\n/', trim($output)) as $line) {
+    $fields = [];
+    if (preg_match_all('/(\w+)="([^"]*)"/', (string)$line, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $fields[$match[1]] = $match[2];
+      }
+    }
+    if (isset($fields['NAME']) && $fields['NAME'] !== '') {
+      $map[$fields['NAME']] = $fields;
+    }
+  }
+  return $map;
+}
+
+function env_json_object($name)
+{
+  $raw = getenv($name);
+  if (!is_string($raw) || trim($raw) === '') {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  return is_array($decoded) ? $decoded : null;
+}
+
+function parse_properties($output)
+{
+  $props = [];
+  foreach (preg_split('/\r?\n/', trim((string)$output)) as $line) {
+    if (preg_match('/^([A-Z0-9_]+)=(.*)$/', $line, $matches)) {
+      $props[$matches[1]] = $matches[2];
+    }
+  }
+  return $props;
+}
+
+function udev_properties($device)
+{
+  $mock = env_json_object('DRIVEMAP_UDEVADM_PROPS_JSON');
+  if (is_array($mock) && isset($mock[$device]) && is_array($mock[$device])) {
+    return array_map('strval', $mock[$device]);
+  }
+
+  $output = shell_exec('udevadm info --query=property --name=' . escapeshellarg('/dev/' . $device) . ' 2>/dev/null');
+  return is_string($output) ? parse_properties($output) : [];
+}
+
+function sata_devpath_info($device)
+{
+  $props = udev_properties($device);
+  $devpath = (string)($props['DEVPATH'] ?? '');
+  if (($props['ID_BUS'] ?? '') !== 'ata' || $devpath === '') {
+    return null;
+  }
+  if (!preg_match('#/(0000:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f])/ata(\d+)(?:/|$)#', $devpath, $matches)) {
+    return null;
+  }
+  return [
+    'bus' => $matches[1],
+    'port' => 'ata' . $matches[2],
+    'port_type' => 'ata',
+    'sort_port' => (int)$matches[2],
+    'evidence' => 'udev:devpath:pci-' . $matches[1] . '-ata-' . $matches[2],
+  ];
+}
+
+function format_bytes($bytes)
+{
+  if (!is_numeric($bytes)) {
+    return '';
+  }
+  $size = (float)$bytes;
+  if ($size <= 0) {
+    return '0 B';
+  }
+  $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  $idx = min((int)floor(log($size, 1024)), count($units) - 1);
+  return round($size / pow(1024, $idx), 2) . ' ' . $units[$idx];
+}
+
+function storage_path_info($name)
+{
+  if (preg_match('/^pci-(.+)-sas-phy(\d+)-lun-\d+$/', $name, $matches)) {
+    return [
+      'bus' => $matches[1],
+      'port_type' => 'sas',
+      'port' => 'phy' . $matches[2],
+      'sort_port' => (int)$matches[2],
+    ];
+  }
+  if (preg_match('/^pci-(.+)-scsi-\d+:\d+:(\d+):\d+$/', $name, $matches)) {
+    return [
+      'bus' => $matches[1],
+      'port_type' => 'scsi',
+      'port' => 'target' . $matches[2],
+      'sort_port' => (int)$matches[2],
+    ];
+  }
+  if (preg_match('/^pci-(.+)-ata-(\d+)(?:\.\d+)?$/', $name, $matches)) {
+    return [
+      'bus' => $matches[1],
+      'port_type' => 'ata',
+      'port' => 'ata' . $matches[2],
+      'sort_port' => (int)$matches[2],
+    ];
+  }
+  return null;
+}
+
+$lsblk = load_lsblk_map($lsblk_source);
+$rows = [];
+$devices_with_path = [];
+$items = is_dir($path_dir) ? scandir($path_dir) : [];
+if ($items === false) {
+  fail("Unable to read storage path directory: $path_dir");
+}
+
+foreach ($items as $item) {
+  if ($item === '.' || $item === '..') {
+    continue;
+  }
+  $info = storage_path_info($item);
+  if ($info === null) {
+    continue;
+  }
+
+  $path = rtrim($path_dir, '/') . '/' . $item;
+  $resolved = realpath($path);
+  $device = $resolved !== false ? basename($resolved) : '';
+  $identity = $device !== '' && isset($lsblk[$device]) ? $lsblk[$device] : [];
+  if ($device !== '') {
+    $devices_with_path[$device] = true;
+  }
+
+  $rows[] = [
+    'hba_path' => $path,
+    'device' => $device !== '' ? '/dev/' . $device : '',
+    'serial' => (string)($identity['SERIAL'] ?? ''),
+    'model' => (string)($identity['MODEL'] ?? ''),
+    'size' => format_bytes($identity['SIZE'] ?? ''),
+    'bus' => $info['bus'],
+    'port' => $info['port'],
+    'port_type' => $info['port_type'],
+    'path_source' => 'by-path',
+    '_sort_port' => $info['sort_port'],
+  ];
+}
+
+foreach ($lsblk as $device => $identity) {
+  if (isset($devices_with_path[$device])) {
+    continue;
+  }
+  if (($identity['TRAN'] ?? '') !== 'sata') {
+    continue;
+  }
+  $type = (string)($identity['TYPE'] ?? 'disk');
+  if ($type !== '' && $type !== 'disk') {
+    continue;
+  }
+
+  $hctl = (string)($identity['HCTL'] ?? '');
+  $devpath_info = sata_devpath_info($device);
+  $rows[] = [
+    'hba_path' => is_array($devpath_info) ? $devpath_info['evidence'] : ($hctl !== '' ? 'lsblk:sata:' . $hctl : 'lsblk:sata'),
+    'device' => '/dev/' . $device,
+    'serial' => (string)($identity['SERIAL'] ?? ''),
+    'model' => (string)($identity['MODEL'] ?? ''),
+    'size' => format_bytes($identity['SIZE'] ?? ''),
+    'bus' => is_array($devpath_info) ? $devpath_info['bus'] : ($hctl !== '' ? 'hctl:' . $hctl : ''),
+    'port' => is_array($devpath_info) ? $devpath_info['port'] : ($hctl !== '' ? 'hctl' . $hctl : 'sata'),
+    'port_type' => is_array($devpath_info) ? $devpath_info['port_type'] : 'sata',
+    'path_source' => is_array($devpath_info) ? 'udev-devpath' : 'lsblk',
+    '_sort_port' => is_array($devpath_info) ? $devpath_info['sort_port'] : ($hctl !== '' && preg_match('/^(\d+):/', $hctl, $matches) ? (int)$matches[1] : PHP_INT_MAX),
+  ];
+}
+
+usort($rows, function ($left, $right) {
+  return [$left['bus'], $left['port_type'], $left['_sort_port'], $left['hba_path']]
+    <=> [$right['bus'], $right['port_type'], $right['_sort_port'], $right['hba_path']];
+});
+
+foreach ($rows as &$row) {
+  unset($row['_sort_port']);
+}
+unset($row);
+
+if (isset($opts['json'])) {
+  fwrite(STDOUT, json_encode($rows, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+  exit(0);
+}
+
+fwrite(STDOUT, "hba_path\tdevice\tserial\tmodel\tsize\tbus\tport\n");
+foreach ($rows as $row) {
+  fwrite(STDOUT, implode("\t", [
+    $row['hba_path'],
+    $row['device'],
+    $row['serial'],
+    $row['model'],
+    $row['size'],
+    $row['bus'],
+    $row['port'],
+  ]) . "\n");
+}
+
+exit(0);

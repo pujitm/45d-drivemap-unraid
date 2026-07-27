@@ -6,6 +6,8 @@
 $server_info_path = getenv('DRIVEMAP_DMAP_SERVER_INFO') ?: '/etc/45drives/server_info/server_info.json';
 $output_path = getenv('DRIVEMAP_DMAP_OUTPUT') ?: '/etc/vdev_id.conf';
 $tools_version_path = getenv('DRIVEMAP_TOOLS_VERSION_FILE') ?: '/etc/45drives/server_info/tools_version';
+$plugin_config_dir = rtrim(getenv('DRIVEMAP_PLUGIN_CONFIG_DIR') ?: '/boot/config/plugins/45d-drivemap', "/\\");
+$hba_phy_order_overrides_path = getenv('DRIVEMAP_DMAP_HBA_PHY_ORDER_OVERRIDES_FILE') ?: ($plugin_config_dir . '/hba_phy_order_overrides.json');
 
 function fail($message)
 {
@@ -58,6 +60,242 @@ function env_json_object($name)
     return null;
   }
   return $decoded;
+}
+
+function env_json_object_any($names)
+{
+  foreach ($names as $name) {
+    $decoded = env_json_object($name);
+    if (is_array($decoded)) {
+      return $decoded;
+    }
+  }
+  return null;
+}
+
+function parse_key_value_properties($output)
+{
+  $props = [];
+  foreach (preg_split('/\r?\n/', trim((string)$output)) as $line) {
+    if (preg_match('/^([A-Z0-9_]+)=(.*)$/', $line, $matches)) {
+      $props[$matches[1]] = $matches[2];
+    }
+  }
+  return $props;
+}
+
+function parse_lsblk_rows($output)
+{
+  $rows = [];
+  if (!is_string($output) || trim($output) === '') {
+    return $rows;
+  }
+  foreach (preg_split('/\r?\n/', trim($output)) as $line) {
+    $fields = [];
+    if (preg_match_all('/(\w+)="([^"]*)"/', (string)$line, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $fields[$match[1]] = $match[2];
+      }
+    }
+    if (isset($fields['NAME']) && $fields['NAME'] !== '') {
+      $rows[$fields['NAME']] = $fields;
+    }
+  }
+  return $rows;
+}
+
+function lsblk_rows()
+{
+  $source = getenv('DRIVEMAP_DMAP_LSBLK');
+  if (is_string($source) && $source !== '') {
+    return parse_lsblk_rows(is_file($source) ? (string)@file_get_contents($source) : $source);
+  }
+  $source = getenv('DRIVEMAP_LSBLK');
+  if (is_string($source) && $source !== '') {
+    return parse_lsblk_rows(is_file($source) ? (string)@file_get_contents($source) : $source);
+  }
+  $output = shell_exec('lsblk -P -b -o NAME,TYPE,TRAN,HCTL,MODEL,SERIAL,SIZE,ROTA 2>/dev/null');
+  return parse_lsblk_rows($output);
+}
+
+function udev_properties($device)
+{
+  $mock = env_json_object_any(['DRIVEMAP_DMAP_UDEVADM_PROPS_JSON', 'DRIVEMAP_UDEVADM_PROPS_JSON']);
+  if (is_array($mock) && isset($mock[$device]) && is_array($mock[$device])) {
+    return array_map('strval', $mock[$device]);
+  }
+
+  $output = shell_exec('udevadm info --query=property --name=' . escapeshellarg('/dev/' . $device) . ' 2>/dev/null');
+  return is_string($output) ? parse_key_value_properties($output) : [];
+}
+
+function preferred_devlink_path($props, $device)
+{
+  $links = preg_split('/\s+/', trim((string)($props['DEVLINKS'] ?? '')));
+  if (!is_array($links)) {
+    $links = [];
+  }
+  foreach (['/dev/disk/by-id/ata-', '/dev/disk/by-id/wwn-'] as $prefix) {
+    foreach ($links as $link) {
+      if (strpos($link, $prefix) === 0 && strpos($link, '-part') === false) {
+        return $link;
+      }
+    }
+  }
+  return '/dev/' . $device;
+}
+
+function sata_devpath_alias_map($bus)
+{
+  static $cache = [];
+  if (isset($cache[$bus])) {
+    return $cache[$bus];
+  }
+
+  $map = [];
+  foreach (lsblk_rows() as $device => $identity) {
+    $type = (string)($identity['TYPE'] ?? 'disk');
+    if ($type !== '' && $type !== 'disk') {
+      continue;
+    }
+    if (($identity['TRAN'] ?? '') !== 'sata') {
+      continue;
+    }
+
+    $props = udev_properties($device);
+    $devpath = (string)($props['DEVPATH'] ?? '');
+    if (($props['ID_BUS'] ?? '') !== 'ata' || $devpath === '') {
+      continue;
+    }
+    if (!preg_match('#/' . preg_quote($bus, '#') . '/ata(\d+)(?:/|$)#', $devpath, $matches)) {
+      continue;
+    }
+    $map[(int)$matches[1]] = preferred_devlink_path($props, $device);
+  }
+
+  ksort($map);
+  $cache[$bus] = $map;
+  return $map;
+}
+
+function sata_devpath_alias_maps()
+{
+  $maps = [];
+  foreach (lsblk_rows() as $device => $identity) {
+    $type = (string)($identity['TYPE'] ?? 'disk');
+    if ($type !== '' && $type !== 'disk') {
+      continue;
+    }
+    if (($identity['TRAN'] ?? '') !== 'sata') {
+      continue;
+    }
+
+    $props = udev_properties($device);
+    $devpath = (string)($props['DEVPATH'] ?? '');
+    if (($props['ID_BUS'] ?? '') !== 'ata' || $devpath === '') {
+      continue;
+    }
+    if (!preg_match('#/(0000:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f])/ata(\d+)(?:/|$)#', $devpath, $matches)) {
+      continue;
+    }
+    $bus = $matches[1];
+    $port = (int)$matches[2];
+    if (!isset($maps[$bus])) {
+      $maps[$bus] = [];
+    }
+    $maps[$bus][$port] = preferred_devlink_path($props, $device);
+  }
+
+  foreach ($maps as &$map) {
+    ksort($map);
+  }
+  unset($map);
+  ksort($maps);
+  return $maps;
+}
+
+function normalize_phy_order($value, $source)
+{
+  if (!is_array($value) || !$value) {
+    fail("Invalid HBA phy order in $source: expected a non-empty array");
+  }
+  $order = [];
+  foreach ($value as $phy) {
+    if (is_int($phy) || (is_string($phy) && preg_match('/^\d+$/', $phy))) {
+      $order[] = (int)$phy;
+      continue;
+    }
+    fail("Invalid HBA phy value in $source: expected integer phys");
+  }
+  return $order;
+}
+
+function normalize_hba_phy_order_overrides($raw, $source)
+{
+  if (!is_array($raw)) {
+    return [];
+  }
+
+  $overrides = [];
+  foreach ($raw as $mobo_model => $model_map) {
+    if (!is_string($mobo_model) && !is_int($mobo_model)) {
+      fail("Invalid HBA phy override key in $source");
+    }
+    $mobo_model = trim((string)$mobo_model);
+    if ($mobo_model === '' || !is_array($model_map)) {
+      fail("Invalid HBA phy override for motherboard in $source");
+    }
+    foreach ($model_map as $hba_model => $order) {
+      if (!is_string($hba_model) && !is_int($hba_model)) {
+        fail("Invalid HBA model override key in $source");
+      }
+      $hba_model = trim((string)$hba_model);
+      if ($hba_model === '') {
+        fail("Invalid empty HBA model override in $source");
+      }
+      $overrides[$mobo_model][$hba_model] = normalize_phy_order($order, "$source ($mobo_model / $hba_model)");
+    }
+  }
+  return $overrides;
+}
+
+function merge_hba_phy_order_overrides($base, $extra)
+{
+  foreach ($extra as $mobo_model => $model_map) {
+    if (!isset($base[$mobo_model]) || !is_array($base[$mobo_model])) {
+      $base[$mobo_model] = [];
+    }
+    foreach ($model_map as $hba_model => $order) {
+      $base[$mobo_model][$hba_model] = $order;
+    }
+  }
+  return $base;
+}
+
+function hba_phy_order_overrides_from_file($path)
+{
+  if (!is_file($path)) {
+    return [];
+  }
+  $raw = @file_get_contents($path);
+  $decoded = is_string($raw) ? json_decode($raw, true) : null;
+  if (!is_array($decoded)) {
+    fail("Unable to read HBA phy order overrides JSON: $path");
+  }
+  return normalize_hba_phy_order_overrides($decoded, $path);
+}
+
+function hba_phy_order_overrides_from_env()
+{
+  $raw = getenv('DRIVEMAP_DMAP_HBA_PHY_ORDER_OVERRIDES_JSON');
+  if ($raw === false || trim((string)$raw) === '') {
+    return [];
+  }
+  $decoded = json_decode((string)$raw, true);
+  if (!is_array($decoded)) {
+    fail('Invalid DRIVEMAP_DMAP_HBA_PHY_ORDER_OVERRIDES_JSON');
+  }
+  return normalize_hba_phy_order_overrides($decoded, 'DRIVEMAP_DMAP_HBA_PHY_ORDER_OVERRIDES_JSON');
 }
 
 function lspci_lines()
@@ -147,7 +385,37 @@ function require_hba($server, $index, $context)
   return [$model, $bus];
 }
 
-function generate_hba_aliases($server, $alias_template, $phy_order)
+function phy_order_for_hba($server, $model, $phy_order, $phy_order_overrides)
+{
+  $mobo_model = (string)($server['Motherboard']['Product Name'] ?? '');
+  if (isset($phy_order_overrides[$mobo_model][$model])) {
+    return $phy_order_overrides[$mobo_model][$model];
+  }
+  if (isset($phy_order_overrides['*'][$model])) {
+    return $phy_order_overrides['*'][$model];
+  }
+  return $phy_order[$model] ?? null;
+}
+
+function resolve_hba_order($server, $model, $bus, $base_order, $phy_order_overrides, $unsupported_context)
+{
+  $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
+  if ($is_hwraid) {
+    $hwraid = hwraid_map_for_bus($bus);
+    if (!is_array($hwraid)) {
+      fail("Missing HWRAID map for bus $bus ($model)");
+    }
+    return $hwraid;
+  }
+
+  $model_phy_order = phy_order_for_hba($server, $model, $base_order, $phy_order_overrides);
+  if (!is_array($model_phy_order)) {
+    fail("Unsupported HBA model for $unsupported_context: $model");
+  }
+  return $model_phy_order;
+}
+
+function generate_hba_aliases($server, $alias_template, $phy_order, $phy_order_overrides)
 {
   $style = (string)($server['Alias Style'] ?? '');
   $chassis = (string)($server['Chassis Size'] ?? '');
@@ -167,21 +435,13 @@ function generate_hba_aliases($server, $alias_template, $phy_order)
       fail("Alias template row missing for HBA index $i");
     }
     [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
-    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-    if ($is_hwraid && !is_array($hwraid)) {
-      fail("Missing HWRAID map for bus $bus ($model)");
-    }
-    if (!$is_hwraid && !isset($phy_order[$model])) {
-      fail("Unsupported HBA model for aliasing: $model");
-    }
+    $order = resolve_hba_order($server, $model, $bus, $phy_order, $phy_order_overrides, 'aliasing');
 
     $count = (int)$counts[$i];
     if ($style === 'STORINATOR' && $chassis === 'MI4') {
       $count = 4;
     }
 
-    $order = $is_hwraid ? $hwraid : $phy_order[$model];
     for ($j = 0; $j < $count; $j++) {
       $order_index = $j;
       if ($style === 'H32' && $i === count($counts) - 2 && $j >= 15) {
@@ -197,7 +457,7 @@ function generate_hba_aliases($server, $alias_template, $phy_order)
   return $lines;
 }
 
-function generate_c8_aliases($server, $phy_order, $alias_template)
+function generate_c8_aliases($server, $phy_order, $phy_order_overrides, $alias_template)
 {
   $style = (string)($server['Alias Style'] ?? '');
   $chassis = (string)($server['Chassis Size'] ?? '');
@@ -205,15 +465,7 @@ function generate_c8_aliases($server, $phy_order, $alias_template)
     fail("Unsupported C8 template: $style/$chassis");
   }
   [$model, $bus] = require_hba($server, 0, "$style/$chassis");
-  $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-  $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-  if ($is_hwraid && !is_array($hwraid)) {
-    fail("Missing HWRAID map for bus $bus ($model)");
-  }
-  if (!$is_hwraid && !isset($phy_order[$model])) {
-    fail("Unsupported HBA model for C8 aliasing: $model");
-  }
-  $order = $is_hwraid ? $hwraid : $phy_order[$model];
+  $order = resolve_hba_order($server, $model, $bus, $phy_order, $phy_order_overrides, 'C8 aliasing');
   $count = (int)$alias_template[$style][$chassis][0];
   $lines = [];
   for ($j = 0; $j < $count; $j++) {
@@ -225,7 +477,7 @@ function generate_c8_aliases($server, $phy_order, $alias_template)
   return $lines;
 }
 
-function generate_f8_aliases($server, $f8_order, $alias_template)
+function generate_f8_aliases($server, $f8_order, $phy_order_overrides, $alias_template)
 {
   $style = (string)($server['Alias Style'] ?? '');
   $chassis = (string)($server['Chassis Size'] ?? '');
@@ -240,15 +492,7 @@ function generate_f8_aliases($server, $f8_order, $alias_template)
       fail("F8 row missing for HBA index $i");
     }
     [$model, $bus] = require_hba($server, $i, "$style/$chassis row " . ($i + 1));
-    $is_hwraid = in_array($model, ['9361-16i', '9361-24i'], true);
-    $hwraid = $is_hwraid ? hwraid_map_for_bus($bus) : null;
-    if ($is_hwraid && !is_array($hwraid)) {
-      fail("Missing HWRAID map for bus $bus ($model)");
-    }
-    if (!$is_hwraid && !isset($f8_order[$model])) {
-      fail("Unsupported HBA model for F8 aliasing: $model");
-    }
-    $order = $is_hwraid ? $hwraid : $f8_order[$model];
+    $order = resolve_hba_order($server, $model, $bus, $f8_order, $phy_order_overrides, 'F8 aliasing');
     $count = (int)$counts[$i];
     for ($j = 0; $j < $count; $j++) {
       if (!isset($order[$j])) {
@@ -284,9 +528,21 @@ function generate_by_path_aliases($server)
 
 function alias_hl4()
 {
+  $maps = sata_devpath_alias_maps();
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $lines = [];
+      $paths = array_reverse(array_values(array_slice($map, 0, 4, true)));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, 1, $idx + 1, $path);
+      }
+      return $lines;
+    }
+  }
+
   $addrs = sata_addresses();
   if (count($addrs) < 1) {
-    fail('HL4 requires at least one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
+    fail('HL4 requires four SATA DEVPATH observations or one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
   }
   $order = [4, 3, 2, 1];
   $lines = [];
@@ -296,11 +552,54 @@ function alias_hl4()
   return $lines;
 }
 
+function alias_x4()
+{
+  $maps = sata_devpath_alias_maps();
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $lines = [];
+      $paths = array_values(array_slice($map, 0, 4, true));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, 1, $idx + 1, $path);
+      }
+      return $lines;
+    }
+  }
+
+  $addrs = sata_addresses();
+  if (count($addrs) < 1) {
+    fail('X4 requires four SATA DEVPATH observations or one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
+  }
+  $lines = [];
+  for ($port = 1; $port <= 4; $port++) {
+    add_alias($lines, 1, $port, "/dev/disk/by-path/pci-{$addrs[0]}-ata-$port");
+  }
+  return $lines;
+}
+
 function alias_hl8()
 {
+  $maps = sata_devpath_alias_maps();
+  $big_maps = [];
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $big_maps[] = $map;
+    }
+  }
+  if (count($big_maps) >= 2) {
+    $lines = [];
+    foreach (array_slice($big_maps, 0, 2) as $row => $map) {
+      $paths = array_reverse(array_values(array_slice($map, 0, 4, true)));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, $row + 1, $idx + 1, $path);
+      }
+    }
+    return $lines;
+  }
+
   $addrs = sata_addresses();
   if (count($addrs) < 2) {
-    fail('HL8 requires two SATA addresses (DRIVEMAP_DMAP_SATA_ADDRS)');
+    fail('HL8 requires two four-port SATA DEVPATH groups or two SATA addresses (DRIVEMAP_DMAP_SATA_ADDRS)');
   }
   $order = [4, 3, 2, 1];
   $lines = [];
@@ -309,6 +608,39 @@ function alias_hl8()
   }
   foreach ($order as $i => $port) {
     add_alias($lines, 2, $i + 1, "/dev/disk/by-path/pci-{$addrs[1]}-ata-$port");
+  }
+  return $lines;
+}
+
+function is_x11sph_board($mobo_model)
+{
+  return in_array($mobo_model, ['X11SPH-nCTF', 'X11SPH-nCTPF'], true);
+}
+
+function alias_hl15_x11_no_hba($os_name, $os_version_id)
+{
+  // Mirrors the factory dalias map for HL15 v1 X11 systems:
+  // bays 1-8 on the motherboard SATA controller, bays 1-9..1-15 on onboard SAS3008.
+  $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
+  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*Intel.*\bSATA Controller/');
+  $sas_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*SAS3008/');
+  if ($sata_bus === null || $sas_bus === null) {
+    fail('HL15 X11 no-HBA aliasing requires Intel SATA and SAS3008 controllers');
+  }
+
+  $sata_devpath_aliases = sata_devpath_alias_map($sata_bus);
+  $lines = [];
+  $sata_ports = range(3, 10);
+  foreach ($sata_ports as $idx => $port) {
+    $slot = $idx + 1;
+    $by_path = "/dev/disk/by-path/pci-$sata_bus-ata-$port$suffix";
+    $path = (is_link($by_path) || is_file($by_path))
+      ? $by_path
+      : ($sata_devpath_aliases[$port] ?? $by_path);
+    add_alias($lines, 1, $slot, $path);
+  }
+  for ($phy = 0; $phy < 7; $phy++) {
+    add_alias($lines, 1, $phy + 9, "/dev/disk/by-path/pci-$sas_bus-sas-phy$phy-lun-0");
   }
   return $lines;
 }
@@ -427,7 +759,7 @@ function alias_mi4($mobo_model, $os_name, $os_version_id)
 function alias_av15_base($os_name, $os_version_id)
 {
   $suffix = ($os_name === 'CentOS Linux' && $os_version_id === '7') ? '.0' : '';
-  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*Intel.*SATA Controller/');
+  $sata_bus = detect_first_lspci_bus('/(\w\w:\w\w\.\w).*Intel.*\bSATA Controller/');
   $sas_bus = detect_first_lspci_bus('/(\w\w:\w\w.\w).*SAS3008/');
   if ($sata_bus === null || $sas_bus === null) {
     fail('Error aliasing AV15-BASE: missing SATA or SAS bus');
@@ -443,12 +775,12 @@ function alias_av15_base($os_name, $os_version_id)
   return $lines;
 }
 
-function alias_hl15_beast($server, $phy_order)
+function alias_hl15_beast($server, $phy_order, $phy_order_overrides)
 {
   [$model, $bus] = require_hba($server, 0, 'HOMELAB/HL15_BEAST');
   $mobo = (string)($server['Motherboard']['Product Name'] ?? '');
-  if (isset($phy_order[$model]) && count($phy_order[$model]) >= 24) {
-    $hba_phy = $phy_order[$model];
+  $hba_phy = phy_order_for_hba($server, $model, $phy_order, $phy_order_overrides);
+  if (is_array($hba_phy) && count($hba_phy) >= 24) {
     $beast = array_merge(array_slice($hba_phy, 0, 15), array_reverse(array_slice($hba_phy, 20, 4)), array_reverse(array_slice($hba_phy, 16, 4)));
     $lines = [];
     foreach ($beast as $idx => $phy) {
@@ -458,11 +790,11 @@ function alias_hl15_beast($server, $phy_order)
   }
 
   if (stripos($mobo, 'ROMED8-2T') !== false && $model === 'HBA 9400-16i') {
-    if (!isset($phy_order[$model])) {
+    if (!is_array($hba_phy)) {
       fail("Missing phy order for HL15_BEAST ROMED8 model: $model");
     }
     $lines = [];
-    $order = $phy_order[$model];
+    $order = $hba_phy;
     for ($j = 0; $j < 15; $j++) {
       if (!isset($order[$j])) {
         fail("Missing phy mapping for HL15_BEAST ROMED8 at index $j");
@@ -515,6 +847,17 @@ $phy_order = [
   '9600-16i' => [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74],
 ];
 
+$phy_order_overrides = [
+  'X11SPH-nCTF' => [
+    'HBA 9400-16i' => [9, 11, 13, 15, 8, 10, 12, 6, 1, 3, 5, 7, 0, 2, 4, 14],
+  ],
+  'X11SPH-nCTPF' => [
+    'HBA 9400-16i' => [9, 11, 13, 15, 8, 10, 12, 6, 1, 3, 5, 7, 0, 2, 4, 14],
+  ],
+];
+$phy_order_overrides = merge_hba_phy_order_overrides($phy_order_overrides, hba_phy_order_overrides_from_file($hba_phy_order_overrides_path));
+$phy_order_overrides = merge_hba_phy_order_overrides($phy_order_overrides, hba_phy_order_overrides_from_env());
+
 $alias_template = [
   'H16' => [
     'AV15' => [23],
@@ -541,6 +884,7 @@ $alias_template = [
     'C8_UBM' => [8],
   ],
   'HOMELAB' => [
+    'X4' => [4],
     'HL15_BEAST' => [23],
     'HL15' => [15],
     'HL4' => [4],
@@ -606,11 +950,13 @@ $aliases = null;
 if ($style === 'BYPATH') {
   $aliases = generate_by_path_aliases($server);
 } elseif ($style === 'HOMELAB' && $chassis === 'HL15_BEAST') {
-  $aliases = alias_hl15_beast($server, $phy_order);
+  $aliases = alias_hl15_beast($server, $phy_order, $phy_order_overrides);
+} elseif ($style === 'HOMELAB' && $chassis === 'HL15' && count($hbas) === 0 && is_x11sph_board($mobo_model)) {
+  $aliases = alias_hl15_x11_no_hba($os_name, $os_version_id);
 } elseif (count($hbas) > 0 && $chassis !== 'C8' && $style !== 'F8') {
-  $aliases = generate_hba_aliases($server, $alias_template, $phy_order);
+  $aliases = generate_hba_aliases($server, $alias_template, $phy_order, $phy_order_overrides);
 } elseif (count($hbas) > 0 && $chassis === 'C8') {
-  $aliases = generate_c8_aliases($server, $phy_order, $alias_template);
+  $aliases = generate_c8_aliases($server, $phy_order, $phy_order_overrides, $alias_template);
 } elseif ($chassis === 'MI4' && $style === 'STORINATOR') {
   $aliases = alias_mi4($mobo_model, $os_name, $os_version_id);
 } elseif ($chassis === 'MI4_UBM' && $style === 'STORINATORUBM') {
@@ -620,9 +966,11 @@ if ($style === 'BYPATH') {
 } elseif ($style === 'DESTROYINATOR') {
   fail('DESTROYINATOR without HBA is not supported in this port');
 } elseif ($style === 'F8') {
-  $aliases = generate_f8_aliases($server, $f8_order, $alias_template);
+  $aliases = generate_f8_aliases($server, $f8_order, $phy_order_overrides, $alias_template);
 } elseif ($style === 'HOMELAB' && $chassis === 'HL4') {
   $aliases = alias_hl4();
+} elseif ($style === 'HOMELAB' && $chassis === 'X4') {
+  $aliases = alias_x4();
 } elseif ($style === 'HOMELAB' && $chassis === 'HL8') {
   $aliases = alias_hl8();
 } elseif ($style === 'PROFESSIONAL' && $chassis === 'PRO4') {

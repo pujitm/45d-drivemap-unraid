@@ -3,6 +3,7 @@ $root = dirname(__DIR__);
 $fixtures = __DIR__ . '/fixtures';
 $map_script = $root . '/scripts/45d-generate-map';
 $server_script = $root . '/scripts/45d-generate-server-info';
+$hba_paths_script = $root . '/scripts/45d-list-hba-paths';
 
 $failures = 0;
 $cleanup_dirs = [];
@@ -146,19 +147,33 @@ function set_common_env($ctx, $fixtures)
   putenv('DRIVEMAP_SERVER_INFO_INPUT=' . $ctx['tmp'] . '/missing_server_info.json');
   putenv('DRIVEMAP_VENDOR_SERVER_IDENTIFIER=/bin/false');
   putenv('DRIVEMAP_SERVER_INFO=');
+  putenv('DRIVEMAP_ATA_PORTS_JSON=');
+  putenv('DRIVEMAP_ATA_PORT_DIR=');
   putenv('DRIVEMAP_SMARTCTL_DIR=');
   putenv('DRIVEMAP_DISABLE_SMART=');
 }
 
 function run_php_script($script, $env = [])
 {
+  return run_php_script_args($script, [], $env);
+}
+
+function run_php_script_args($script, $args = [], $env = [])
+{
   $prefix = [];
   foreach ($env as $key => $value) {
     $prefix[] = $key . '=' . escapeshellarg((string)$value);
   }
+  $parts = [];
+  foreach ($args as $arg) {
+    $parts[] = escapeshellarg((string)$arg);
+  }
   $output = [];
   $code = 0;
   $cmd = (count($prefix) ? implode(' ', $prefix) . ' ' : '') . 'php ' . escapeshellarg($script);
+  if ($parts) {
+    $cmd .= ' ' . implode(' ', $parts);
+  }
   exec($cmd, $output, $code);
   return [$code, $output];
 }
@@ -496,6 +511,83 @@ $server_info = load_json_file($server_info_path);
 assert_true(is_array($server_info), 'server_info.json parses as JSON');
 assert_equal($server_info['Model'] ?? '', 'Storinator-S45', 'server_info model');
 
+// Scenario 1b: HBA path inventory helper lists by-path, sdX, serial, and port.
+$ctx_hba_paths = create_context('hba-paths');
+@symlink($ctx_hba_paths['dev_dir'] . '/sda', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sdb', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-scsi-0:0:59:0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sdc', $ctx_hba_paths['by_path_dir'] . '/pci-0000:02:00.0-sas-phy1-lun-0');
+@symlink($ctx_hba_paths['dev_dir'] . '/sda', $ctx_hba_paths['by_path_dir'] . '/pci-0000:00:17.0-ata-1');
+[$hba_paths_code, $hba_paths_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $ctx_hba_paths['by_path_dir'],
+  'DRIVEMAP_LSBLK' => $fixtures . '/lsblk.txt',
+]);
+assert_equal($hba_paths_code, 0, 'hba path helper exits successfully');
+$hba_paths_rows = json_decode(implode("\n", $hba_paths_output), true);
+assert_true(is_array($hba_paths_rows), 'hba path helper emits JSON rows');
+assert_equal(count($hba_paths_rows), 4, 'hba path helper includes HBA and SATA paths');
+$hba_paths_by_port = array_column($hba_paths_rows, null, 'port');
+assert_equal($hba_paths_by_port['phy2']['hba_path'] ?? '', $ctx_hba_paths['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0', 'hba path helper includes by-path');
+assert_equal($hba_paths_by_port['phy2']['device'] ?? '', '/dev/sda', 'hba path helper resolves sdX');
+assert_equal($hba_paths_by_port['phy2']['serial'] ?? '', 'SAMPLE0001', 'hba path helper includes serial');
+assert_equal($hba_paths_by_port['phy2']['model'] ?? '', 'ST12000NM0007', 'hba path helper includes model');
+assert_equal($hba_paths_by_port['phy2']['port_type'] ?? '', 'sas', 'hba path helper parses sas phy');
+assert_equal($hba_paths_by_port['phy2']['path_source'] ?? '', 'by-path', 'hba path helper marks by-path source');
+assert_equal($hba_paths_by_port['target59']['device'] ?? '', '/dev/sdb', 'hba path helper resolves scsi sdX');
+assert_equal($hba_paths_by_port['target59']['port_type'] ?? '', 'scsi', 'hba path helper parses scsi target');
+assert_equal($hba_paths_by_port['ata1']['device'] ?? '', '/dev/sda', 'hba path helper resolves sata sdX');
+assert_equal($hba_paths_by_port['ata1']['port_type'] ?? '', 'ata', 'hba path helper parses sata port');
+
+// Scenario 1c: HBA path inventory helper includes lsblk-visible SATA disks
+// even when udev does not publish /dev/disk/by-path ata symlinks.
+$ctx_hba_paths_sata_fallback = create_context('hba-paths-sata-fallback');
+@symlink($ctx_hba_paths_sata_fallback['dev_dir'] . '/sda', $ctx_hba_paths_sata_fallback['by_path_dir'] . '/pci-0000:01:00.0-sas-phy2-lun-0');
+$lsblk_sata_fallback = implode("\n", [
+  'NAME="sda" TYPE="disk" TRAN="sas" HCTL="0:0:0:0" MODEL="ST12000NM0007" SERIAL="SAMPLE0001" SIZE="1099511627776" ROTA="1"',
+  'NAME="sdg" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="WDC WUH721414ALE6L4" SERIAL="9JH7KJXT" SIZE="14000519643136" ROTA="1"',
+  'NAME="sdg1" TYPE="part" TRAN="" HCTL="" MODEL="" SERIAL="" SIZE="14000518594560" ROTA="1"',
+]);
+[$hba_paths_sata_code, $hba_paths_sata_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $ctx_hba_paths_sata_fallback['by_path_dir'],
+  'DRIVEMAP_LSBLK' => $lsblk_sata_fallback,
+  'DRIVEMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hba_paths_sata_code, 0, 'hba path helper with sata fallback exits successfully');
+$hba_paths_sata_rows = json_decode(implode("\n", $hba_paths_sata_output), true);
+assert_true(is_array($hba_paths_sata_rows), 'hba path helper with sata fallback emits JSON rows');
+assert_equal(count($hba_paths_sata_rows), 2, 'hba path helper includes by-path and lsblk-only SATA rows');
+$hba_paths_sata_by_device = array_column($hba_paths_sata_rows, null, 'device');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['hba_path'] ?? '', 'udev:devpath:pci-0000:00:17.0-ata-3', 'hba path helper marks udev DEVPATH SATA source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port_type'] ?? '', 'ata', 'hba path helper marks udev DEVPATH SATA port type');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['path_source'] ?? '', 'udev-devpath', 'hba path helper marks udev DEVPATH fallback source');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['bus'] ?? '', '0000:00:17.0', 'hba path helper derives SATA PCI bus from udev DEVPATH');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['port'] ?? '', 'ata3', 'hba path helper derives SATA port from udev DEVPATH');
+assert_equal($hba_paths_sata_by_device['/dev/sdg']['serial'] ?? '', '9JH7KJXT', 'hba path helper includes lsblk-only SATA serial');
+
+// Scenario 1d: HBA path inventory helper still reports fallback rows when /dev/disk/by-path is absent.
+$ctx_hba_paths_missing_dir = create_context('hba-paths-missing-dir');
+$missing_by_path_dir = $ctx_hba_paths_missing_dir['tmp'] . '/missing-by-path';
+[$hba_paths_missing_dir_code, $hba_paths_missing_dir_output] = run_php_script_args($hba_paths_script, ['--json'], [
+  'DRIVEMAP_HBA_PATH_DIR' => $missing_by_path_dir,
+  'DRIVEMAP_LSBLK' => $lsblk_sata_fallback,
+  'DRIVEMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hba_paths_missing_dir_code, 0, 'hba path helper tolerates missing by-path directory');
+$hba_paths_missing_dir_rows = json_decode(implode("\n", $hba_paths_missing_dir_output), true);
+assert_true(is_array($hba_paths_missing_dir_rows), 'hba path helper emits JSON with missing by-path directory');
+$hba_paths_missing_dir_by_device = array_column($hba_paths_missing_dir_rows, null, 'device');
+assert_equal($hba_paths_missing_dir_by_device['/dev/sdg']['hba_path'] ?? '', 'udev:devpath:pci-0000:00:17.0-ata-3', 'hba path helper includes udev fallback when by-path directory is missing');
+assert_true(!isset($hba_paths_missing_dir_by_device['/dev/sda']), 'hba path helper does not invent SAS topology without by-path evidence');
+
 [$lsdev_code, $lsdev_body] = run_api_action($root, 'lsdev');
 assert_equal($lsdev_code, 0, 'lsdev endpoint exits successfully');
 $lsdev = json_decode($lsdev_body, true);
@@ -758,6 +850,311 @@ if (is_array($invalid_server)) {
   assert_true($invalid_aliases === null || $invalid_aliases === [], 'ported dmap does not emit aliases on invalid style');
 }
 
+// Scenario 8b: HL15 v1 X11 systems without a discrete HBA use the factory dalias order.
+$ctx_hl15_x11 = create_context('ported-dmap-hl15-x11-no-hba');
+$hl15_x11_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$hl15_x11_lspci = [
+  '00:11.5 SATA controller: Intel Corporation C620 Series Chipset Family sSATA Controller [AHCI mode]',
+  '00:17.0 SATA controller: Intel Corporation C620 Series Chipset Family SATA Controller [AHCI mode]',
+  '19:00.0 Serial Attached SCSI controller: Broadcom / LSI SAS3008 PCI-Express Fusion-MPT SAS-3',
+];
+$hl15_x11_result = run_ported_dmap($root, $ctx_hl15_x11, $hl15_x11_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($hl15_x11_lspci),
+]);
+assert_equal($hl15_x11_result['code'] ?? 1, 0, 'hl15 x11 no-hba dmap exits successfully');
+$hl15_x11_expected = [
+  'alias 1-1 /dev/disk/by-path/pci-0000:00:17.0-ata-3',
+  'alias 1-2 /dev/disk/by-path/pci-0000:00:17.0-ata-4',
+  'alias 1-3 /dev/disk/by-path/pci-0000:00:17.0-ata-5',
+  'alias 1-4 /dev/disk/by-path/pci-0000:00:17.0-ata-6',
+  'alias 1-5 /dev/disk/by-path/pci-0000:00:17.0-ata-7',
+  'alias 1-6 /dev/disk/by-path/pci-0000:00:17.0-ata-8',
+  'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-9',
+  'alias 1-8 /dev/disk/by-path/pci-0000:00:17.0-ata-10',
+  'alias 1-9 /dev/disk/by-path/pci-0000:19:00.0-sas-phy0-lun-0',
+  'alias 1-10 /dev/disk/by-path/pci-0000:19:00.0-sas-phy1-lun-0',
+  'alias 1-11 /dev/disk/by-path/pci-0000:19:00.0-sas-phy2-lun-0',
+  'alias 1-12 /dev/disk/by-path/pci-0000:19:00.0-sas-phy3-lun-0',
+  'alias 1-13 /dev/disk/by-path/pci-0000:19:00.0-sas-phy4-lun-0',
+  'alias 1-14 /dev/disk/by-path/pci-0000:19:00.0-sas-phy5-lun-0',
+  'alias 1-15 /dev/disk/by-path/pci-0000:19:00.0-sas-phy6-lun-0',
+];
+assert_equal($hl15_x11_result['aliases'] ?? null, $hl15_x11_expected, 'hl15 x11 no-hba dmap matches factory dalias order');
+
+// Scenario 8b2: HL15 v1 X11 SATA aliases fall back to udev DEVPATH when ata by-path links are absent.
+$ctx_hl15_x11_devpath = create_context('ported-dmap-hl15-x11-devpath-sata');
+$hl15_x11_devpath_result = run_ported_dmap($root, $ctx_hl15_x11_devpath, $hl15_x11_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($hl15_x11_lspci),
+  'DRIVEMAP_DMAP_LSBLK' => implode("\n", [
+    'NAME="sdg" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="WDC WUH721414ALE6L4" SERIAL="9JH7KJXT" SIZE="14000519643136" ROTA="1"',
+    'NAME="sdh" TYPE="disk" TRAN="sata" HCTL="4:0:0:0" MODEL="WDC WUH721414ALE604" SERIAL="9RG7N6VC" SIZE="14000519643136" ROTA="1"',
+    'NAME="sdm" TYPE="disk" TRAN="sata" HCTL="10:0:0:0" MODEL="WDC WD80EFZZ-68BTXN0" SERIAL="WD-CA19LHJK" SIZE="8001563222016" ROTA="1"',
+  ]),
+  'DRIVEMAP_DMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sdg' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/27 /dev/disk/by-id/ata-WDC_WUH721414ALE6L4_9JH7KJXT /dev/disk/by-id/wwn-0x5000cca258d187f7',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata3/host3/target3:0:0/3:0:0:0/block/sdg',
+      'ID_BUS' => 'ata',
+    ],
+    'sdh' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/28 /dev/disk/by-id/ata-WDC_WUH721414ALE604_9RG7N6VC /dev/disk/by-id/wwn-0x5000cca264c37a81',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata4/host4/target4:0:0/4:0:0:0/block/sdh',
+      'ID_BUS' => 'ata',
+    ],
+    'sdm' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/33 /dev/disk/by-id/ata-WDC_WD80EFZZ-68BTXN0_WD-CA19LHJK /dev/disk/by-id/wwn-0x50014ee26a68e1eb',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:17.0/ata10/host10/target10:0:0/10:0:0:0/block/sdm',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hl15_x11_devpath_result['code'] ?? 1, 0, 'hl15 x11 devpath SATA dmap exits successfully');
+$hl15_x11_devpath_aliases = $hl15_x11_devpath_result['aliases'] ?? [];
+assert_equal($hl15_x11_devpath_aliases[0] ?? '', 'alias 1-1 /dev/disk/by-id/ata-WDC_WUH721414ALE6L4_9JH7KJXT', 'hl15 x11 maps slot 1-1 from SATA port 3');
+assert_equal($hl15_x11_devpath_aliases[1] ?? '', 'alias 1-2 /dev/disk/by-id/ata-WDC_WUH721414ALE604_9RG7N6VC', 'hl15 x11 maps slot 1-2 from SATA port 4');
+assert_equal($hl15_x11_devpath_aliases[6] ?? '', 'alias 1-7 /dev/disk/by-path/pci-0000:00:17.0-ata-9', 'hl15 x11 leaves slot 1-7 missing when SATA port 9 is absent');
+assert_equal($hl15_x11_devpath_aliases[7] ?? '', 'alias 1-8 /dev/disk/by-id/ata-WDC_WD80EFZZ-68BTXN0_WD-CA19LHJK', 'hl15 x11 maps slot 1-8 from SATA port 10');
+
+// Scenario 8b3: HL4 falls back to udev DEVPATH when ata by-path links are absent.
+$ctx_hl4_devpath = create_context('ported-dmap-hl4-devpath-sata');
+$hl4_server = [
+  'Model' => '45Homelab HL-4',
+  'Canvas Model' => 'HomeLab-HL4',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL4',
+  'Motherboard' => [
+    'Product Name' => 'B550I AORUS PRO AX',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$hl4_result = run_ported_dmap($root, $ctx_hl4_devpath, $hl4_server, [
+  'DRIVEMAP_DMAP_LSBLK' => implode("\n", [
+    'NAME="sda" TYPE="disk" TRAN="sata" HCTL="0:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="ZYD54BXA" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdb" TYPE="disk" TRAN="sata" HCTL="1:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="ZYD6554S" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdd" TYPE="disk" TRAN="sata" HCTL="2:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="ZYD7FM9P" SIZE="24000277680128" ROTA="1"',
+    'NAME="sde" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="ZYD5X4DZ" SIZE="24000277680128" ROTA="1"',
+  ]),
+  'DRIVEMAP_DMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sda' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/19 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD54BXA /dev/disk/by-id/wwn-0x5000c500ea2264be',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata1/host0/target0:0:0/0:0:0:0/block/sda',
+      'ID_BUS' => 'ata',
+    ],
+    'sdb' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/20 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD6554S /dev/disk/by-id/wwn-0x5000c500ea7a324c',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata2/host1/target1:0:0/1:0:0:0/block/sdb',
+      'ID_BUS' => 'ata',
+    ],
+    'sdd' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/22 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD7FM9P /dev/disk/by-id/wwn-0x5000c500ea78ab58',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata3/host2/target2:0:0/2:0:0:0/block/sdd',
+      'ID_BUS' => 'ata',
+    ],
+    'sde' => [
+      'DEVLINKS' => '/dev/disk/by-diskseq/23 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD5X4DZ /dev/disk/by-id/wwn-0x5000c500ea6bd21b',
+      'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata4/host3/target3:0:0/3:0:0:0/block/sde',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($hl4_result['code'] ?? 1, 0, 'hl4 devpath SATA dmap exits successfully');
+assert_equal($hl4_result['aliases'] ?? [], [
+  'alias 1-1 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD5X4DZ',
+  'alias 1-2 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD7FM9P',
+  'alias 1-3 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD6554S',
+  'alias 1-4 /dev/disk/by-id/ata-ST24000NT002-3N1101_ZYD54BXA',
+], 'hl4 maps observed SATA ports in reverse DEVPATH order');
+
+// Scenario 8b4: HL8 falls back to two udev DEVPATH groups when ata by-path links are absent.
+$ctx_hl8_devpath = create_context('ported-dmap-hl8-devpath-sata');
+$hl8_server = [
+  'Model' => '45Homelab HL-8',
+  'Canvas Model' => 'HomeLab-HL8',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL8',
+  'Motherboard' => [
+    'Product Name' => 'B550I AORUS PRO AX',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$hl8_result = run_ported_dmap($root, $ctx_hl8_devpath, $hl8_server, [
+  'DRIVEMAP_DMAP_LSBLK' => implode("\n", [
+    'NAME="sda" TYPE="disk" TRAN="sata" HCTL="0:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8A1" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdb" TYPE="disk" TRAN="sata" HCTL="1:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8A2" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdc" TYPE="disk" TRAN="sata" HCTL="2:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8A3" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdd" TYPE="disk" TRAN="sata" HCTL="3:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8A4" SIZE="24000277680128" ROTA="1"',
+    'NAME="sde" TYPE="disk" TRAN="sata" HCTL="4:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8B1" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdf" TYPE="disk" TRAN="sata" HCTL="5:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8B2" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdg" TYPE="disk" TRAN="sata" HCTL="6:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8B3" SIZE="24000277680128" ROTA="1"',
+    'NAME="sdh" TYPE="disk" TRAN="sata" HCTL="7:0:0:0" MODEL="ST24000NT002-3N1101" SERIAL="HL8B4" SIZE="24000277680128" ROTA="1"',
+  ]),
+  'DRIVEMAP_DMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sda' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A1', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata1/host0/target0:0:0/0:0:0:0/block/sda', 'ID_BUS' => 'ata'],
+    'sdb' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A2', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata2/host1/target1:0:0/1:0:0:0/block/sdb', 'ID_BUS' => 'ata'],
+    'sdc' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A3', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata3/host2/target2:0:0/2:0:0:0/block/sdc', 'ID_BUS' => 'ata'],
+    'sdd' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A4', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.1/0000:01:00.1/ata4/host3/target3:0:0/3:0:0:0/block/sdd', 'ID_BUS' => 'ata'],
+    'sde' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B1', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.2/0000:02:00.1/ata5/host4/target4:0:0/4:0:0:0/block/sde', 'ID_BUS' => 'ata'],
+    'sdf' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B2', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.2/0000:02:00.1/ata6/host5/target5:0:0/5:0:0:0/block/sdf', 'ID_BUS' => 'ata'],
+    'sdg' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B3', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.2/0000:02:00.1/ata7/host6/target6:0:0/6:0:0:0/block/sdg', 'ID_BUS' => 'ata'],
+    'sdh' => ['DEVLINKS' => '/dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B4', 'DEVPATH' => '/devices/pci0000:00/0000:00:02.2/0000:02:00.1/ata8/host7/target7:0:0/7:0:0:0/block/sdh', 'ID_BUS' => 'ata'],
+  ]),
+]);
+assert_equal($hl8_result['code'] ?? 1, 0, 'hl8 devpath SATA dmap exits successfully');
+assert_equal($hl8_result['aliases'] ?? [], [
+  'alias 1-1 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A4',
+  'alias 1-2 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A3',
+  'alias 1-3 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A2',
+  'alias 1-4 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8A1',
+  'alias 2-1 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B4',
+  'alias 2-2 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B3',
+  'alias 2-3 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B2',
+  'alias 2-4 /dev/disk/by-id/ata-ST24000NT002-3N1101_HL8B1',
+], 'hl8 maps two observed SATA groups in reverse DEVPATH order');
+
+// Scenario 8b5: X4 has its own dynamic four-port SATA mapping and reuses the HL4 canvas.
+$ctx_x4_devpath = create_context('ported-dmap-x4-devpath-sata');
+$x4_server = [
+  'Model' => 'Unraid >< 45Homelab X-4',
+  'Canvas Model' => 'HomeLab-HL4',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'X4',
+  'Motherboard' => [
+    'Product Name' => 'X4 Prototype',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$x4_result = run_ported_dmap($root, $ctx_x4_devpath, $x4_server, [
+  'DRIVEMAP_DMAP_LSBLK' => implode("\n", [
+    'NAME="sda" TYPE="disk" TRAN="sata" HCTL="5:0:0:0" MODEL="TOSHIBA MG10AFA22TE" SERIAL="Z360A01YFM8J" SIZE="22000969973760" ROTA="1"',
+    'NAME="sdb" TYPE="disk" TRAN="sata" HCTL="6:0:0:0" MODEL="TOSHIBA MG10AFA22TE" SERIAL="Z360A00HFM8J" SIZE="22000969973760" ROTA="1"',
+    'NAME="sdc" TYPE="disk" TRAN="sata" HCTL="7:0:0:0" MODEL="TOSHIBA MG10AFA22TE" SERIAL="Z360A00TFM8J" SIZE="22000969973760" ROTA="1"',
+    'NAME="sdd" TYPE="disk" TRAN="sata" HCTL="8:0:0:0" MODEL="TOSHIBA MG10AFA22TE" SERIAL="Z360A021FM8J" SIZE="22000969973760" ROTA="1"',
+  ]),
+  'DRIVEMAP_DMAP_UDEVADM_PROPS_JSON' => json_encode([
+    'sda' => [
+      'DEVLINKS' => '/dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A01YFM8J /dev/disk/by-id/wwn-0x5000039bca000001',
+      'DEVPATH' => '/devices/pci0000:80/0000:80:17.0/ata5/host5/target5:0:0/5:0:0:0/block/sda',
+      'ID_BUS' => 'ata',
+    ],
+    'sdb' => [
+      'DEVLINKS' => '/dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A00HFM8J /dev/disk/by-id/wwn-0x5000039bca000002',
+      'DEVPATH' => '/devices/pci0000:80/0000:80:17.0/ata6/host6/target6:0:0/6:0:0:0/block/sdb',
+      'ID_BUS' => 'ata',
+    ],
+    'sdc' => [
+      'DEVLINKS' => '/dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A00TFM8J /dev/disk/by-id/wwn-0x5000039bca000003',
+      'DEVPATH' => '/devices/pci0000:80/0000:80:17.0/ata7/host7/target7:0:0/7:0:0:0/block/sdc',
+      'ID_BUS' => 'ata',
+    ],
+    'sdd' => [
+      'DEVLINKS' => '/dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A021FM8J /dev/disk/by-id/wwn-0x5000039bca000004',
+      'DEVPATH' => '/devices/pci0000:80/0000:80:17.0/ata8/host8/target8:0:0/8:0:0:0/block/sdd',
+      'ID_BUS' => 'ata',
+    ],
+  ]),
+]);
+assert_equal($x4_result['code'] ?? 1, 0, 'x4 devpath SATA dmap exits successfully');
+assert_equal($x4_result['aliases'] ?? [], [
+  'alias 1-1 /dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A01YFM8J',
+  'alias 1-2 /dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A00HFM8J',
+  'alias 1-3 /dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A00TFM8J',
+  'alias 1-4 /dev/disk/by-id/ata-TOSHIBA_MG10AFA22TE_Z360A021FM8J',
+], 'x4 maps observed SATA ports in ascending DEVPATH order');
+
+// Scenario 8c: AV15 base aliasing also ignores Intel sSATA when choosing the SATA bus.
+$ctx_av15_base_sata = create_context('ported-dmap-av15-base-sata-regex');
+$av15_base_server = [
+  'Model' => 'Storinator-AV15',
+  'Alias Style' => 'AV15-BASE',
+  'Chassis Size' => 'AV15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [],
+  'OS NAME' => 'Unraid',
+  'OS VERSION_ID' => '',
+];
+$av15_base_lspci = [
+  '00:11.5 SATA controller: Intel Corporation C620 Series Chipset Family sSATA Controller [AHCI mode]',
+  '00:17.0 SATA controller: Intel Corporation C620 Series Chipset Family SATA Controller [AHCI mode]',
+  '19:00.0 Serial Attached SCSI controller: Broadcom / LSI SAS3008 PCI-Express Fusion-MPT SAS-3',
+];
+$av15_base_result = run_ported_dmap($root, $ctx_av15_base_sata, $av15_base_server, [
+  'DRIVEMAP_DMAP_LSPCI_JSON' => json_encode($av15_base_lspci),
+]);
+assert_equal($av15_base_result['code'] ?? 1, 0, 'av15 base dmap exits successfully with sSATA present');
+$av15_base_aliases = $av15_base_result['aliases'] ?? [];
+assert_equal($av15_base_aliases[8] ?? '', 'alias 1-9 /dev/disk/by-path/pci-0000:00:17.0-ata-2', 'av15 base uses SATA bus instead of sSATA bus');
+assert_true(!preg_grep('/pci-0000:00:11\.5-ata/', $av15_base_aliases), 'av15 base never selects the sSATA bus for any alias');
+
+// Scenario 8d: X11 systems with an HBA 9400-16i use the X11-specific phy swap.
+$ctx_hl15_x11_hba = create_context('ported-dmap-hl15-x11-hba-9400');
+$hl15_x11_hba_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11SPH-nCTPF',
+  ],
+  'HBA' => [[
+    'Model' => 'HBA 9400-16i',
+    'Bus Address' => '0000:b4:00.0',
+    'Drive Connections' => 16,
+  ]],
+];
+$hl15_x11_hba_result = run_ported_dmap($root, $ctx_hl15_x11_hba, $hl15_x11_hba_server, []);
+assert_equal($hl15_x11_hba_result['code'] ?? 1, 0, 'hl15 x11 hba 9400 dmap exits successfully');
+$hl15_x11_hba_aliases = $hl15_x11_hba_result['aliases'] ?? [];
+assert_equal($hl15_x11_hba_aliases[7] ?? '', 'alias 1-8 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy6-lun-0', 'hl15 x11 hba 9400 maps slot 1-8 to phy6');
+assert_equal($hl15_x11_hba_aliases[14] ?? '', 'alias 1-15 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy4-lun-0', 'hl15 x11 hba 9400 keeps slot 1-15 on phy4');
+assert_true(!in_array('alias 1-8 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy14-lun-0', $hl15_x11_hba_aliases, true), 'hl15 x11 hba 9400 does not map emitted slots to phy14');
+
+// Scenario 8e: site-specific HBA phy overrides can support non-standard motherboard/HBA builds.
+$ctx_hba_override = create_context('ported-dmap-hba-phy-override');
+$override_config_dir = $ctx_hba_override['tmp'] . '/plugin-config';
+ensure_dir($override_config_dir);
+file_put_contents($override_config_dir . '/hba_phy_order_overrides.json', json_encode([
+  'X11CUSTOM' => [
+    'HBA 9400-16i' => [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+  ],
+], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+$hba_override_server = [
+  'Model' => '45Homelab HL-15 1.0',
+  'Alias Style' => 'HOMELAB',
+  'Chassis Size' => 'HL15',
+  'Motherboard' => [
+    'Product Name' => 'X11CUSTOM',
+  ],
+  'HBA' => [[
+    'Model' => 'HBA 9400-16i',
+    'Bus Address' => '0000:b4:00.0',
+    'Drive Connections' => 16,
+  ]],
+];
+$hba_override_result = run_ported_dmap($root, $ctx_hba_override, $hba_override_server, [
+  'DRIVEMAP_PLUGIN_CONFIG_DIR' => $override_config_dir,
+]);
+assert_equal($hba_override_result['code'] ?? 1, 0, 'hba phy override dmap exits successfully');
+$hba_override_aliases = $hba_override_result['aliases'] ?? [];
+assert_equal($hba_override_aliases[0] ?? '', 'alias 1-1 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy15-lun-0', 'hba phy override maps slot 1-1 from config');
+assert_equal($hba_override_aliases[14] ?? '', 'alias 1-15 /dev/disk/by-path/pci-0000:b4:00.0-sas-phy1-lun-0', 'hba phy override maps slot 1-15 from config');
+
 // Scenario 9: HL15 fallback detection + auto alias generation without vendor tools.
 $ctx_hl15 = create_context('hl15-fallback');
 set_common_env($ctx_hl15, $fixtures);
@@ -793,7 +1190,86 @@ assert_true(is_array($hl15_map), 'hl15 fallback drivemap parses as JSON');
 assert_equal(count($hl15_map['rows'] ?? []), 1, 'hl15 fallback row count');
 assert_equal(count($hl15_map['rows'][0] ?? []), 15, 'hl15 fallback bay count');
 
-// Scenario 10: copied server_info gains a stable canvas model without changing the display model.
+// Scenario 10: X11 HL15 v1 detection works even when no HBA is reported.
+$ctx_hl15_x11_info = create_context('hl15-x11-server-info-no-hba');
+set_common_env($ctx_hl15_x11_info, $fixtures);
+[$hl15_x11_info_code] = run_php_script($server_script, [
+  'DRIVEMAP_PRODUCT_NAME' => 'X11SPH-nCTPF',
+  'DRIVEMAP_BOARD_NAME' => 'X11SPH-nCTPF',
+  'DRIVEMAP_BOARD_VENDOR' => 'Supermicro',
+  'DRIVEMAP_LSPCI_VERBOSE' => '',
+  'DRIVEMAP_OUTPUT_DIR' => $ctx_hl15_x11_info['out_dir'],
+]);
+assert_equal($hl15_x11_info_code, 0, 'hl15 x11 no-hba server_info exits successfully');
+$hl15_x11_info = load_json_file($ctx_hl15_x11_info['out_dir'] . '/server_info.json');
+assert_true(is_array($hl15_x11_info), 'hl15 x11 no-hba server_info parses as JSON');
+assert_equal($hl15_x11_info['Model'] ?? '', '45Homelab HL-15 1.0', 'hl15 x11 no-hba model');
+assert_equal($hl15_x11_info['Alias Style'] ?? '', 'HOMELAB', 'hl15 x11 no-hba alias style');
+assert_equal($hl15_x11_info['Chassis Size'] ?? '', 'HL15', 'hl15 x11 no-hba chassis');
+assert_equal($hl15_x11_info['HBA'] ?? null, [], 'hl15 x11 no-hba has empty hba list');
+
+// Scenario 10b: HL4 server_info detection uses the B550I AORUS PRO AX motherboard.
+$ctx_hl4_info = create_context('hl4-server-info');
+set_common_env($ctx_hl4_info, $fixtures);
+[$hl4_info_code] = run_php_script($server_script, [
+  'DRIVEMAP_PRODUCT_NAME' => 'B550I AORUS PRO AX',
+  'DRIVEMAP_BOARD_NAME' => 'B550I AORUS PRO AX',
+  'DRIVEMAP_ATA_PORTS_JSON' => json_encode([
+    '0000:01:00.1' => ['ata1', 'ata2', 'ata3', 'ata4'],
+  ]),
+  'DRIVEMAP_LSPCI_VERBOSE' => '',
+  'DRIVEMAP_OUTPUT_DIR' => $ctx_hl4_info['out_dir'],
+]);
+assert_equal($hl4_info_code, 0, 'hl4 server_info exits successfully');
+$hl4_info = load_json_file($ctx_hl4_info['out_dir'] . '/server_info.json');
+assert_true(is_array($hl4_info), 'hl4 server_info parses as JSON');
+assert_equal($hl4_info['Model'] ?? '', '45Homelab HL-4', 'hl4 server_info model');
+assert_equal($hl4_info['Canvas Model'] ?? '', 'HomeLab-HL4', 'hl4 server_info canvas model');
+assert_equal($hl4_info['Alias Style'] ?? '', 'HOMELAB', 'hl4 server_info alias style');
+assert_equal($hl4_info['Chassis Size'] ?? '', 'HL4', 'hl4 server_info chassis');
+assert_equal($hl4_info['HBA'] ?? null, [], 'hl4 server_info has empty hba list');
+
+// Scenario 10c: HL8 server_info detection uses two SATA controller groups on the B550I AORUS PRO AX motherboard.
+$ctx_hl8_info = create_context('hl8-server-info');
+set_common_env($ctx_hl8_info, $fixtures);
+[$hl8_info_code] = run_php_script($server_script, [
+  'DRIVEMAP_PRODUCT_NAME' => 'B550I AORUS PRO AX',
+  'DRIVEMAP_BOARD_NAME' => 'B550I AORUS PRO AX',
+  'DRIVEMAP_ATA_PORTS_JSON' => json_encode([
+    '0000:01:00.1' => ['ata1', 'ata2', 'ata3', 'ata4'],
+    '0000:02:00.1' => ['ata5', 'ata6', 'ata7', 'ata8'],
+  ]),
+  'DRIVEMAP_LSPCI_VERBOSE' => '',
+  'DRIVEMAP_OUTPUT_DIR' => $ctx_hl8_info['out_dir'],
+]);
+assert_equal($hl8_info_code, 0, 'hl8 server_info exits successfully');
+$hl8_info = load_json_file($ctx_hl8_info['out_dir'] . '/server_info.json');
+assert_true(is_array($hl8_info), 'hl8 server_info parses as JSON');
+assert_equal($hl8_info['Model'] ?? '', '45Homelab HL-8', 'hl8 server_info model');
+assert_equal($hl8_info['Canvas Model'] ?? '', 'HomeLab-HL8', 'hl8 server_info canvas model');
+assert_equal($hl8_info['Alias Style'] ?? '', 'HOMELAB', 'hl8 server_info alias style');
+assert_equal($hl8_info['Chassis Size'] ?? '', 'HL8', 'hl8 server_info chassis');
+assert_equal($hl8_info['HBA'] ?? null, [], 'hl8 server_info has empty hba list');
+
+// Scenario 10d: X4 server_info detection uses the B860I WiFi motherboard while reusing the HL4 canvas.
+$ctx_x4_info = create_context('x4-server-info');
+set_common_env($ctx_x4_info, $fixtures);
+[$x4_info_code] = run_php_script($server_script, [
+  'DRIVEMAP_PRODUCT_NAME' => 'Default string',
+  'DRIVEMAP_BOARD_NAME' => 'B860I WiFi',
+  'DRIVEMAP_LSPCI_VERBOSE' => '',
+  'DRIVEMAP_OUTPUT_DIR' => $ctx_x4_info['out_dir'],
+]);
+assert_equal($x4_info_code, 0, 'x4 server_info exits successfully');
+$x4_info = load_json_file($ctx_x4_info['out_dir'] . '/server_info.json');
+assert_true(is_array($x4_info), 'x4 server_info parses as JSON');
+assert_equal($x4_info['Model'] ?? '', 'Unraid >< 45Homelab X-4', 'x4 server_info model');
+assert_equal($x4_info['Canvas Model'] ?? '', 'HomeLab-HL4', 'x4 server_info canvas model');
+assert_equal($x4_info['Alias Style'] ?? '', 'HOMELAB', 'x4 server_info alias style');
+assert_equal($x4_info['Chassis Size'] ?? '', 'X4', 'x4 server_info chassis');
+assert_equal($x4_info['HBA'] ?? null, [], 'x4 server_info has empty hba list');
+
+// Scenario 11: copied server_info gains a stable canvas model without changing the display model.
 $ctx_server_copy = create_context('server-info-copy-canvas-model');
 set_common_env($ctx_server_copy, $fixtures);
 $server_copy_input = $ctx_server_copy['tmp'] . '/source_server_info.json';

@@ -48,6 +48,16 @@ $product_name_file_override = product_name_value(read_first_value([
   $plugin_config_dir . '/product_name',
 ]));
 
+function env_json_object($name)
+{
+  $raw = getenv($name);
+  if (!is_string($raw) || trim($raw) === '') {
+    return null;
+  }
+  $decoded = json_decode($raw, true);
+  return is_array($decoded) ? $decoded : null;
+}
+
 function alias_templates()
 {
   // Layout templates used to infer alias style/chassis from alias counts.
@@ -72,6 +82,7 @@ function alias_templates()
       'MI4' => [4],
     ],
     'HOMELAB' => [
+      'X4' => [4],
       'HL4' => [4],
       'HL8' => [4, 4],
       'HL15' => [15],
@@ -305,6 +316,90 @@ function count_hbas_by_connections($hbas, $connections)
   return $count;
 }
 
+function ata_port_groups()
+{
+  $mock = env_json_object('DRIVEMAP_ATA_PORTS_JSON');
+  if (is_array($mock)) {
+    $groups = [];
+    foreach ($mock as $pci => $ports) {
+      if (!is_array($ports)) {
+        continue;
+      }
+      foreach ($ports as $port) {
+        if (preg_match('/^ata\d+$/', (string)$port)) {
+          $groups[(string)$pci][(string)$port] = true;
+        }
+      }
+    }
+    return $groups;
+  }
+
+  $base = getenv('DRIVEMAP_ATA_PORT_DIR') ?: '/sys/class/ata_port';
+  if (!is_dir($base)) {
+    return [];
+  }
+
+  $items = scandir($base);
+  if (!is_array($items)) {
+    return [];
+  }
+
+  $groups = [];
+  foreach ($items as $item) {
+    if (!preg_match('/^ata\d+$/', $item)) {
+      continue;
+    }
+    $device_path = realpath(rtrim($base, '/') . '/' . $item . '/device');
+    if ($device_path === false) {
+      continue;
+    }
+    $current = $device_path;
+    while ($current !== '' && $current !== '/' && !preg_match('/^(?:[0-9A-Fa-f]{4}:)?[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f]$/', basename($current))) {
+      $current = dirname($current);
+    }
+    $pci = basename($current);
+    if (!preg_match('/^(?:[0-9A-Fa-f]{4}:)?[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f]$/', $pci)) {
+      continue;
+    }
+    $groups[$pci][$item] = true;
+  }
+
+  return $groups;
+}
+
+function homelab_compact_profile_from_ata_ports($board_name)
+{
+  if (!is_string($board_name) || !preg_match('/^B550I\s+AORUS\s+PRO\s+AX$/i', $board_name)) {
+    return null;
+  }
+
+  $big_groups = [];
+  foreach (ata_port_groups() as $ports) {
+    if (count($ports) >= 4) {
+      $big_groups[] = $ports;
+    }
+  }
+
+  if (count($big_groups) >= 2) {
+    return [
+      'prefix' => 'HomeLab',
+      'style' => 'HOMELAB',
+      'chassis' => 'HL8',
+      'model' => '45Homelab HL-8',
+    ];
+  }
+  if (count($big_groups) === 1) {
+    return [
+      'prefix' => 'HomeLab',
+      'style' => 'HOMELAB',
+      'chassis' => 'HL4',
+      'model' => '45Homelab HL-4',
+    ];
+  }
+
+  return null;
+}
+
 function hardware_profile($product_name, $board_name, $hbas)
 {
   $names = array_filter([$board_name, $product_name], fn($value) => is_string($value) && $value !== '');
@@ -325,7 +420,7 @@ function hardware_profile($product_name, $board_name, $hbas)
       'model' => 'Unraid >< 45Homelab X-15',
     ];
   }
-  if ($has_name(['X11SPH-nCTF', 'X11SPH-nCTPF']) && count_hbas_by_connections($hbas, 16) === 1 && count_hbas_by_connections($hbas, 24) === 0) {
+  if ($has_name(['X11SPH-nCTF', 'X11SPH-nCTPF']) && count_hbas_by_connections($hbas, 16) <= 1 && count_hbas_by_connections($hbas, 24) === 0) {
     return [
       'prefix' => 'HomeLab',
       'style' => 'HOMELAB',
@@ -347,6 +442,19 @@ function hardware_profile($product_name, $board_name, $hbas)
       'style' => 'HOMELAB',
       'chassis' => 'HL15',
       'model' => '45Homelab HL-15',
+    ];
+  }
+  $compact_profile = homelab_compact_profile_from_ata_ports($board_name);
+  if (is_array($compact_profile)) {
+    return $compact_profile;
+  }
+  if (is_string($board_name) && preg_match('/^B860I\s+WiFi$/i', $board_name)) {
+    return [
+      'prefix' => 'HomeLab',
+      'style' => 'HOMELAB',
+      'chassis' => 'X4',
+      'model' => 'Unraid >< 45Homelab X-4',
+      'canvas_model' => 'HomeLab-HL4',
     ];
   }
   return null;
@@ -377,6 +485,9 @@ function canvas_model_from_server_info($server_info)
   $chassis = isset($server_info['Chassis Size']) && is_string($server_info['Chassis Size']) ? strtoupper($server_info['Chassis Size']) : '';
 
   if ($style !== '' && $chassis !== '' && $chassis !== '?') {
+    if ($style === 'HOMELAB' && $chassis === 'X4') {
+      return 'HomeLab-HL4';
+    }
     $prefix = '';
     if (preg_match('/\b(Storinator|Stornado|HomeLab|Professional|Proxinator|Studio)\b/i', $model, $matches)) {
       $prefix_map = [
@@ -474,7 +585,7 @@ $model = $force_model !== '' ? $force_model : ($profile['model'] ?? model_from_p
 $server_info = [
   // Keep output compatible with the embedded 45Drives frontend contract.
   'Model' => $model !== '' ? $model : '?',
-  'Canvas Model' => model_from_parts($prefix, $alias_style, $chassis),
+  'Canvas Model' => $profile['canvas_model'] ?? (($alias_style === 'HOMELAB' && $chassis === 'X4') ? 'HomeLab-HL4' : model_from_parts($prefix, $alias_style, $chassis)),
   'Chassis Size' => $chassis !== '' ? $chassis : '?',
   'Alias Style' => $alias_style !== '' ? $alias_style : '?',
   'Serial' => $serial !== '' ? $serial : '?',
