@@ -3,7 +3,7 @@
 ## 0.4.0
 
 ### Added
-- Added automatic detection and drive mapping for Unraid >< 45Homelab X-4 systems.
+- Added automatic detection and drive mapping for Unraid 45Homelab X-4 systems.
 - Added SATA DEVPATH-based mapping for HL-4 and HL-8 systems when stable by-path links are unavailable.
 - Added configurable HBA port and phy-order overrides for HL-15 systems.
 
