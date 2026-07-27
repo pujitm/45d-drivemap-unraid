@@ -178,6 +178,42 @@ function sata_devpath_alias_map($bus)
   return $map;
 }
 
+function sata_devpath_alias_maps()
+{
+  $maps = [];
+  foreach (lsblk_rows() as $device => $identity) {
+    $type = (string)($identity['TYPE'] ?? 'disk');
+    if ($type !== '' && $type !== 'disk') {
+      continue;
+    }
+    if (($identity['TRAN'] ?? '') !== 'sata') {
+      continue;
+    }
+
+    $props = udev_properties($device);
+    $devpath = (string)($props['DEVPATH'] ?? '');
+    if (($props['ID_BUS'] ?? '') !== 'ata' || $devpath === '') {
+      continue;
+    }
+    if (!preg_match('#/(0000:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f])/ata(\d+)(?:/|$)#', $devpath, $matches)) {
+      continue;
+    }
+    $bus = $matches[1];
+    $port = (int)$matches[2];
+    if (!isset($maps[$bus])) {
+      $maps[$bus] = [];
+    }
+    $maps[$bus][$port] = preferred_devlink_path($props, $device);
+  }
+
+  foreach ($maps as &$map) {
+    ksort($map);
+  }
+  unset($map);
+  ksort($maps);
+  return $maps;
+}
+
 function normalize_phy_order($value, $source)
 {
   if (!is_array($value) || !$value) {
@@ -492,9 +528,21 @@ function generate_by_path_aliases($server)
 
 function alias_hl4()
 {
+  $maps = sata_devpath_alias_maps();
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $lines = [];
+      $paths = array_reverse(array_values(array_slice($map, 0, 4, true)));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, 1, $idx + 1, $path);
+      }
+      return $lines;
+    }
+  }
+
   $addrs = sata_addresses();
   if (count($addrs) < 1) {
-    fail('HL4 requires at least one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
+    fail('HL4 requires four SATA DEVPATH observations or one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
   }
   $order = [4, 3, 2, 1];
   $lines = [];
@@ -504,11 +552,54 @@ function alias_hl4()
   return $lines;
 }
 
+function alias_x4()
+{
+  $maps = sata_devpath_alias_maps();
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $lines = [];
+      $paths = array_values(array_slice($map, 0, 4, true));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, 1, $idx + 1, $path);
+      }
+      return $lines;
+    }
+  }
+
+  $addrs = sata_addresses();
+  if (count($addrs) < 1) {
+    fail('X4 requires four SATA DEVPATH observations or one SATA address (DRIVEMAP_DMAP_SATA_ADDRS)');
+  }
+  $lines = [];
+  for ($port = 1; $port <= 4; $port++) {
+    add_alias($lines, 1, $port, "/dev/disk/by-path/pci-{$addrs[0]}-ata-$port");
+  }
+  return $lines;
+}
+
 function alias_hl8()
 {
+  $maps = sata_devpath_alias_maps();
+  $big_maps = [];
+  foreach ($maps as $map) {
+    if (count($map) >= 4) {
+      $big_maps[] = $map;
+    }
+  }
+  if (count($big_maps) >= 2) {
+    $lines = [];
+    foreach (array_slice($big_maps, 0, 2) as $row => $map) {
+      $paths = array_reverse(array_values(array_slice($map, 0, 4, true)));
+      foreach ($paths as $idx => $path) {
+        add_alias($lines, $row + 1, $idx + 1, $path);
+      }
+    }
+    return $lines;
+  }
+
   $addrs = sata_addresses();
   if (count($addrs) < 2) {
-    fail('HL8 requires two SATA addresses (DRIVEMAP_DMAP_SATA_ADDRS)');
+    fail('HL8 requires two four-port SATA DEVPATH groups or two SATA addresses (DRIVEMAP_DMAP_SATA_ADDRS)');
   }
   $order = [4, 3, 2, 1];
   $lines = [];
@@ -793,6 +884,7 @@ $alias_template = [
     'C8_UBM' => [8],
   ],
   'HOMELAB' => [
+    'X4' => [4],
     'HL15_BEAST' => [23],
     'HL15' => [15],
     'HL4' => [4],
@@ -877,6 +969,8 @@ if ($style === 'BYPATH') {
   $aliases = generate_f8_aliases($server, $f8_order, $phy_order_overrides, $alias_template);
 } elseif ($style === 'HOMELAB' && $chassis === 'HL4') {
   $aliases = alias_hl4();
+} elseif ($style === 'HOMELAB' && $chassis === 'X4') {
+  $aliases = alias_x4();
 } elseif ($style === 'HOMELAB' && $chassis === 'HL8') {
   $aliases = alias_hl8();
 } elseif ($style === 'PROFESSIONAL' && $chassis === 'PRO4') {

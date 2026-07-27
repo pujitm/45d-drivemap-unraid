@@ -376,6 +376,7 @@ function row_templates()
       'C8_UBM' => [8],
     ],
     'HOMELAB' => [
+      'X4' => [4],
       'HL15_BEAST' => [23],
       'HL15' => [15],
       'HL4' => [4],

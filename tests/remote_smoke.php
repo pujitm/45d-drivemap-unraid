@@ -172,6 +172,8 @@ function set_common_env($ctx, $fixtures)
   putenv('DRIVEMAP_SERVER_INFO_INPUT=' . $ctx['tmp'] . '/missing_server_info.json');
   putenv('DRIVEMAP_VENDOR_SERVER_IDENTIFIER=/bin/false');
   putenv('DRIVEMAP_SERVER_INFO=');
+  putenv('DRIVEMAP_ATA_PORTS_JSON=');
+  putenv('DRIVEMAP_ATA_PORT_DIR=');
   putenv('DRIVEMAP_SMARTCTL_DIR=');
   putenv('DRIVEMAP_DISABLE_SMART=');
 }
